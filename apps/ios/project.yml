@@ -265,6 +265,7 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
+      - path: Sources/Widgets/OpenClawWidgetSnapshot.swift
       # Shared continuous avatar waveform; dependency-free for widget isolation.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
         group: Shared
@@ -275,6 +276,7 @@ targets:
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
+      - package: OpenClawKit
     settings:
       base:
         CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
@@ -466,6 +468,7 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Tests/Logic
+      - path: Sources/Widgets/OpenClawWidgetSnapshot.swift
       - path: ShareExtension/ShareDraftComposer.swift
         group: ShareExtension
       - path: ShareExtension/ShareContentExtractor.swift
