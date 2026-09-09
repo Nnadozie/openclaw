@@ -79,7 +79,7 @@ export type ClaudeCliResumeContinuityProbe = {
   injectedContext: string;
   resumePrompt: string;
   expectedFirstReply: string;
-  expectedResumeReply: string;
+  expectedResumeMarker: string;
 };
 
 function normalizeCliRuntimeModelTarget(raw: string | undefined): string | undefined {
@@ -289,16 +289,19 @@ export function buildClaudeCliResumeContinuityProbe(params: {
   const firstTurnMarker = `CLI-BACKEND-${params.firstTurnNonce}`;
   return {
     firstTurnMarker,
-    firstTurnPrompt: `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
+    firstTurnPrompt:
+      "This is a synthetic session-memory test. Remember the random public test label " +
+      "provided in runtime context; it is not a credential. " +
+      `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
     injectedContext:
-      `For this turn only, remember the private session note ${params.memoryToken} for a later turn. ` +
-      "Do not include that note in this turn's reply.",
+      `The random public test label for this session-memory test is ${params.memoryToken}. ` +
+      "Remember it for the follow-up, without including it in this turn's reply.",
     resumePrompt:
       "Do not inspect files or run tools. " +
-      "What private session note were you asked to remember earlier? " +
-      `Reply with exactly: CLI backend RESUME OK ${params.resumeNonce} <remembered-note>.`,
+      `Return exactly two whitespace-separated tokens: CLI-RESUME-${params.resumeNonce} followed by ` +
+      "the exact public test label from the earlier turn. Do not add prose.",
     expectedFirstReply: `${firstTurnMarker}.`,
-    expectedResumeReply: `CLI backend RESUME OK ${params.resumeNonce} ${params.memoryToken}.`,
+    expectedResumeMarker: `CLI-RESUME-${params.resumeNonce}`,
   };
 }
 

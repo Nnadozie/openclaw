@@ -9,6 +9,10 @@ import {
   resolveCliBackendConfig,
   resolveCliBackendLiveTest,
 } from "../agents/cli-backends.js";
+import {
+  closeClaudeLiveSessionsForTest,
+  getClaudeLiveSessionRunIdsForTest,
+} from "../agents/cli-runner/claude-live-session.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
@@ -20,7 +24,6 @@ import {
   resetGlobalHookRunner,
 } from "../plugin-sdk/testing.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import { resolveClaudeCliSessionFilePath } from "./cli-session-history.js";
 import {
   applyCliBackendLiveEnv,
   buildClaudeCliResumeContinuityProbe,
@@ -678,29 +681,18 @@ describeLive("gateway live (cli backend)", () => {
           ).toBe(true);
         } else if (CLI_RESUME) {
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
+          let expectedLiveRunIds: string[] | undefined;
+          let expectedCliSessionId: string | undefined;
           if (resumeContinuityProbe) {
             const nativeHistory = await activeClient.request<{ messages?: unknown[] }>(
               "chat.history",
               { sessionKey },
             );
-            const cliSessionId = resolveImportedClaudeCliSessionId(nativeHistory.messages ?? []);
+            expectedCliSessionId = resolveImportedClaudeCliSessionId(nativeHistory.messages ?? []);
             expect(JSON.stringify(nativeHistory.messages ?? [])).toContain(memoryToken);
-            expect(cliSessionId).toBeTruthy();
-            const cliSessionFile = cliSessionId
-              ? resolveClaudeCliSessionFilePath({ cliSessionId })
-              : undefined;
-            expect(cliSessionFile).toBeTruthy();
-            if (!cliSessionFile) {
-              throw new Error("Claude CLI continuity probe could not locate its native transcript");
-            }
-            // The warm child keeps this turn in memory. Remove Claude's native transcript so
-            // --resume and raw-history reseed cannot recover the hidden note if that child is lost.
-            await fs.rm(cliSessionFile, { force: true });
-            const rawHistory = await activeClient.request<{ messages?: unknown[] }>(
-              "chat.history",
-              { sessionKey },
-            );
-            expect(JSON.stringify(rawHistory.messages ?? [])).not.toContain(memoryToken);
+            expect(expectedCliSessionId).toBeTruthy();
+            expectedLiveRunIds = getClaudeLiveSessionRunIdsForTest();
+            expect(expectedLiveRunIds).toHaveLength(1);
           }
           const resumePayload = await requestWithCodexTimeoutRetry(
             providerId,
@@ -734,14 +726,27 @@ describeLive("gateway live (cli backend)", () => {
           if (providerId === "codex-cli") {
             expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
           } else if (resumeContinuityProbe) {
-            expect(
-              matchesCliBackendReply(resumeText, resumeContinuityProbe.expectedResumeReply),
-            ).toBe(true);
+            expect(resumeText).toContain(resumeContinuityProbe.expectedResumeMarker);
+            expect(resumeText).toContain(memoryToken);
+            expect(getClaudeLiveSessionRunIdsForTest()).toEqual(expectedLiveRunIds);
+            const resumedHistory = await activeClient.request<{ messages?: unknown[] }>(
+              "chat.history",
+              { sessionKey },
+            );
+            expect(resolveImportedClaudeCliSessionId(resumedHistory.messages ?? [])).toBe(
+              expectedCliSessionId,
+            );
           } else {
             expect(
               matchesCliBackendReply(resumeText, `CLI backend RESUME OK ${resumeNonce}.`),
             ).toBe(true);
           }
+        }
+
+        // The continuity turns suppress bundled MCP so Claude's warm child stays alive. Restore
+        // normal backend resolution before independently enabled image or MCP probes run.
+        if (resumeContinuityProbe) {
+          cliBackendsTesting.resetDepsForTest();
         }
 
         if (enableCliImageProbe) {
@@ -802,6 +807,7 @@ describeLive("gateway live (cli backend)", () => {
             await server?.close();
           }
         } finally {
+          await closeClaudeLiveSessionsForTest();
           cliBackendsTesting.resetDepsForTest();
           resetGlobalHookRunner();
           await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

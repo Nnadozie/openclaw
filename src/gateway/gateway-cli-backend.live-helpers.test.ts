@@ -198,9 +198,9 @@ describe("gateway cli backend live helpers", () => {
     });
   });
 
-  it("builds Claude continuity prompts without revealing the hidden note", () => {
+  it("builds Claude continuity prompts without revealing the public label", () => {
     const { buildClaudeCliResumeContinuityProbe } = liveHelpers;
-    const memoryToken = "CLI-MEM-A1B2C3D4E5F6";
+    const memoryToken = "test-memory-token";
 
     const probe = buildClaudeCliResumeContinuityProbe({
       firstTurnNonce: "112233",
@@ -208,18 +208,15 @@ describe("gateway cli backend live helpers", () => {
       memoryToken,
     });
 
-    expect(probe.firstTurnPrompt).toBe(
-      "Do not inspect files or run tools. Reply with exactly: CLI-BACKEND-112233.",
-    );
-    expect(probe.resumePrompt).toBe(
-      "Do not inspect files or run tools. " +
-        "What private session note were you asked to remember earlier? " +
-        "Reply with exactly: CLI backend RESUME OK 445566 <remembered-note>.",
-    );
+    expect(probe.firstTurnPrompt).toContain("public test label");
+    expect(probe.firstTurnPrompt).toContain("not a credential");
+    expect(probe.firstTurnPrompt).toContain("CLI-BACKEND-112233");
+    expect(probe.resumePrompt).toContain("public test label");
+    expect(probe.resumePrompt).toContain("CLI-RESUME-445566");
     expect(probe.firstTurnPrompt).not.toContain(memoryToken);
     expect(probe.resumePrompt).not.toContain(memoryToken);
     expect(probe.injectedContext).toContain(memoryToken);
-    expect(probe.expectedResumeReply).toBe("CLI backend RESUME OK 445566 CLI-MEM-A1B2C3D4E5F6.");
+    expect(probe.expectedResumeMarker).toBe("CLI-RESUME-445566");
   });
 
   it("finds only Claude-imported native session ids", () => {
