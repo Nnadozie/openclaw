@@ -25,7 +25,6 @@ const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 export const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 export const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
-const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 export function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
@@ -329,7 +328,10 @@ export async function writeLaunchAgentPlist({
     programArguments: prepared.programArguments,
     workingDirectory,
     stdoutPath,
-    stderrPath: LAUNCH_AGENT_STDERR_PATH,
+    // launchd has no stream-merge option, so both handles target one file.
+    // Diagnostics reads only stdout on darwin (readLastGatewayErrorLine);
+    // a separate stderr target would silently drop startup crash output.
+    stderrPath: stdoutPath,
     environment: prepared.inlineEnvironment,
   });
   await publishLaunchAgentPlist({ label, plistPath, contents: plist });
@@ -382,7 +384,10 @@ export async function rewriteLaunchAgentPlistForRestart({
     programArguments: prepared.programArguments,
     workingDirectory: existing.workingDirectory,
     stdoutPath,
-    stderrPath: LAUNCH_AGENT_STDERR_PATH,
+    // launchd has no stream-merge option, so both handles target one file.
+    // Diagnostics reads only stdout on darwin (readLastGatewayErrorLine);
+    // a separate stderr target would silently drop startup crash output.
+    stderrPath: stdoutPath,
     environment: prepared.inlineEnvironment,
   });
   const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
