@@ -146,7 +146,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!options.projectNamespace) {
         throw new Error("Prepared repository namespace is unavailable");
       }
-      // A ready hit and restart recovery must prove current source access too;
+      // A ready hit and resumed initial binding must prove current source access too;
       // a snapshot is reusable content, never a substitute for repository authority.
       const preparedIdentity = readWorkerProjectPreparation(
         store.get(request.environmentId)!.profileSnapshot.project,

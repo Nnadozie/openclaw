@@ -20,7 +20,7 @@ describe("prepared repository source access", () => {
   const fixture = usePreparedPoolFixture();
   it.each([
     "warm",
-    "restart",
+    "reopened store",
     "source unavailable",
     "caller revoked",
     "identity replaced",
@@ -39,7 +39,7 @@ describe("prepared repository source access", () => {
     const record = fixture.attach(
       fixture.ready(fixture.seed("repository", { repository: project })),
     );
-    if (scenario === "restart") {
+    if (scenario === "reopened store") {
       fixture.reopenStore();
     }
     let callerCurrent = true;
@@ -120,7 +120,7 @@ describe("prepared repository source access", () => {
         }
       },
     });
-    if (scenario === "warm" || scenario === "restart") {
+    if (scenario === "warm" || scenario === "reopened store") {
       await expect(result).resolves.toEqual(prepared);
       expect(bind).toHaveBeenCalledOnce();
       expect(revalidate).toHaveBeenCalledOnce();
