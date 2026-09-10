@@ -55,6 +55,7 @@ import {
   verifyCliCronMcpLoopbackPreflight,
   verifyCliCronMcpProbe,
 } from "./gateway-cli-backend.live-probe-helpers.js";
+import { ensureMcpLoopbackServer } from "./mcp-http.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -747,6 +748,13 @@ describeLive("gateway live (cli backend)", () => {
         // normal backend resolution before independently enabled image or MCP probes run.
         if (resumeContinuityProbe) {
           cliBackendsTesting.resetDepsForTest();
+          // The continuity turns intentionally bypass bundled MCP so Claude's warm child can be
+          // observed across both requests. A standalone MCP probe normally starts the loopback
+          // runtime during its first agent preparation; the combined probe performs its direct
+          // preflight first, so activate that same runtime explicitly at this phase boundary.
+          if (enableCliMcpProbe) {
+            await ensureMcpLoopbackServer();
+          }
         }
 
         if (enableCliImageProbe) {
