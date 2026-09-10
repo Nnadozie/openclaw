@@ -15,6 +15,7 @@ import type {
   WorkerLocalWorkspaceSyncRequest,
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceCommand,
+  WorkerWorkspaceSyncResult,
   WorkerWorkspaceTunnelHandle,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -426,19 +427,33 @@ export function createNodeWorkerWorkspaceActions(params: {
     }
     const source = request.source;
     const repository = createNodeWorkerRepositoryPreparation(exec);
-    const prepared = await repository.prepareRepository({
+    const identity = {
       origin: source.url,
       ref: source.ref,
       commit: source.baseCommit,
       branch: source.branch,
       gitToken: source.gitToken,
-    });
-    if (prepared.kind === "failed") {
-      throw new Error(`Cloud repository preparation failed: ${prepared.reason}`);
+    };
+    let baseline: WorkerWorkspaceSyncResult & { baseCommit: string };
+    if (source.prepared) {
+      if (!source.baseCommit || source.runSetupScript) {
+        throw new Error("Prepared repository requires its pinned commit and completed setup");
+      }
+      baseline = await repository.bindPreparedRepository(
+        { ...identity, commit: source.baseCommit },
+        source.prepared,
+      );
+    } else {
+      const prepared = await repository.prepareRepository(identity);
+      if (prepared.kind === "failed") {
+        throw new Error(`Cloud repository preparation failed: ${prepared.reason}`);
+      }
+      baseline = prepared.result;
     }
-    const baseManifestRef = prepared.result.manifestRef;
-    const baseCommit = prepared.result.baseCommit;
-    const remoteWorkspaceDir = prepared.result.remoteWorkspaceDir;
+    const baseManifestRef =
+      baseline.mode === "repository" ? baseline.baseManifestRef : baseline.manifestRef;
+    const baseCommit = baseline.baseCommit;
+    const remoteWorkspaceDir = baseline.remoteWorkspaceDir;
     if (request.gitAuthor) {
       await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
     }
@@ -452,7 +467,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       isAuthorized: params.isOwnerCurrent,
       signal: params.ownerSignal,
     });
-    let manifestRef = baseManifestRef;
+    let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
       const checkpoint = source.checkpoint;
       const digest = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
