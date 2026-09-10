@@ -505,13 +505,13 @@ export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"):
   }
 }
 
-async function verifyNpmBetaFloor(packageNames: readonly string[]): Promise<void> {
+async function verifyNpmBetaFloor(packageNames: readonly string[], version: string): Promise<void> {
   const errors: string[] = [];
   for (const packageName of packageNames) {
     const entries = resolveNpmJsonEntries(
       parseJson(
-        await runNpmViewWithRetry(["view", packageName, "dist-tags", "--json"]),
-        `npm view ${packageName} dist-tags`,
+        await runNpmViewWithRetry(["view", `${packageName}@${version}`, "dist-tags", "--json"]),
+        `npm view ${packageName}@${version} dist-tags`,
       ),
     );
     const tags = entries.length === 1 ? entries[0] : undefined;
@@ -537,7 +537,7 @@ async function verifyNpmBetaFloor(packageNames: readonly string[]): Promise<void
   }
   if (errors.length > 0) {
     throw new Error(
-      `npm beta must be at or above latest; release verification failed:\n${errors.join("\n")}\nRun the release ledger's npm dist-tag repair, then verify again.`,
+      `npm beta must be at or above latest; release verification failed:\n${errors.join("\n")}\nFor each listed stale package, run:\nnpm dist-tag add <pkg>@<latest> beta\nUse that package's current latest version, preserve newer beta tags, then verify again.`,
     );
   }
 }
@@ -1375,7 +1375,10 @@ export async function verifyBetaRelease(
     selection: args.pluginSelection,
     packages: npmPlugins,
   });
-  await verifyNpmBetaFloor(["openclaw", ...npmPlugins.map((plugin) => plugin.packageName)]);
+  await verifyNpmBetaFloor(
+    ["openclaw", ...npmPlugins.map((plugin) => plugin.packageName)],
+    args.version,
+  );
 
   const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
   lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);

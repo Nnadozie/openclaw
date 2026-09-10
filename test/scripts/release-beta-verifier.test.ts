@@ -158,17 +158,19 @@ const args = process.argv.slice(2);
 if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
   const npm = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "npm.json")));
   const print = (value) => console.log(JSON.stringify(npm.npm12 ? [value] : value));
-  if (args[2] === "dist-tags" && npm.tags[args[1]]) {
+  const name = Object.keys(npm.tags).find((name) => args[1] === name || args[1] === name + "@" + npm.version);
+  if (!name) throw new Error("Unexpected npm package: " + args[1]);
+  if (args[2] === "dist-tags") {
     const visible = path.join(path.dirname(process.argv[1]), "npm-visible");
-    if (npm.transientlyMissing === args[1] && !fs.existsSync(visible)) {
+    if (npm.transientlyMissing === name && !fs.existsSync(visible)) {
       fs.writeFileSync(visible, "ready");
       console.error("npm ERR! code E404");
       process.exit(1);
     }
-    print(npm.tags[args[1]]);
+    if (args[1] === name && !npm.tags[name].latest) process.exit(0);
+    print(npm.tags[name]);
   } else {
-    const name = Object.keys(npm.tags).find((name) => args[1] === name + "@" + npm.version);
-    if (!name) throw new Error("Unexpected npm package: " + args[1]);
+    if (args[1] !== name + "@" + npm.version) throw new Error("Expected an exact npm version");
     print({version: npm.version, "dist-tags": npm.tags[name], "dist.integrity": "sha512-test", "dist.tarball": "https://example.invalid/package.tgz"});
   }
 } else if (args[0] === "run" && args[1] === "view" && args[2] === "44") {
@@ -247,20 +249,23 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
       },
     });
 
-    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+    const verification = verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+    await expect(verification).rejects.toThrow(
       "openclaw: beta=2026.9.1, latest=2026.9.3\n" +
         "@openclaw/demo: beta=2026.9.3-beta.1, latest=2026.9.3\n" +
         "@openclaw/other: beta=<missing>, latest=2026.9.3",
     );
+    await expect(verification).rejects.toThrow("npm dist-tag add <pkg>@<latest> beta");
   });
 
   it.each([false, true])(
-    "allows a beta-only plugin before its first stable publication (initial E404: %s)",
+    "queries a beta-only plugin without latest (npm 12 and initial E404: %s)",
     async (transientlyMissing) => {
       const beta = "2026.9.4-beta.1";
       const fixture = workflowFixture({}, true, {
         version: beta,
         distTag: "beta",
+        npm12: transientlyMissing,
         tags: {
           openclaw: { latest: "2026.9.3", beta },
           "@openclaw/demo": { beta },
