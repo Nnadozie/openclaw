@@ -20,7 +20,7 @@ import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
-import { findModelCatalogEntry } from "./model-catalog-lookup.js";
+import { findModelCatalogEntry, findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -1032,6 +1032,7 @@ function prepareModelPolicy(params: ModelPolicyPreparationParams) {
       : policyAliasIndex;
   const configuredCatalog = buildConfiguredModelCatalog({
     cfg: params.cfg,
+    catalog: params.catalog,
     manifestPlugins: params.manifestPlugins,
   });
   const metadata = buildModelCatalogMetadata({
@@ -1374,6 +1375,7 @@ function resolveConfiguredModelManifestPlugins(params: {
 /** Build catalog entries from configured provider model rows. */
 export function buildConfiguredModelCatalog(params: {
   cfg: OpenClawConfig;
+  catalog?: readonly ModelCatalogEntry[];
   workspaceDir?: string;
   manifestPlugins?: ModelManifestPlugins;
 }): ModelCatalogEntry[] {
@@ -1396,6 +1398,10 @@ export function buildConfiguredModelCatalog(params: {
       if (!id) {
         continue;
       }
+      // Provider defaults are fallbacks; only a model-level pin overrides its captured route.
+      const accepted = findModelInCatalog(params.catalog ?? [], providerId, id);
+      const api = model.api ?? accepted?.api ?? provider.api;
+      const baseUrl = model.baseUrl ?? accepted?.baseUrl ?? provider.baseUrl;
       const name = normalizeOptionalString(model?.name) || id;
       const contextWindow =
         typeof model?.contextWindow === "number" && model.contextWindow > 0
@@ -1419,10 +1425,8 @@ export function buildConfiguredModelCatalog(params: {
         provider: providerId,
         id,
         name,
-        api: model.api ?? provider.api,
-        ...((model.baseUrl ?? provider.baseUrl)
-          ? { baseUrl: model.baseUrl ?? provider.baseUrl }
-          : {}),
+        api,
+        ...(baseUrl ? { baseUrl } : {}),
         contextWindow,
         contextTokens,
         reasoning,
