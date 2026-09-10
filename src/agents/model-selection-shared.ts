@@ -17,6 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -1386,6 +1387,14 @@ export function buildConfiguredModelCatalog(params: {
 
   const manifestPlugins = resolveConfiguredModelManifestPlugins(params);
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
+  const capturedByIdentity = params.catalog?.length
+    ? new Map(
+        dedupeByKey(params.catalog, resolveModelCatalogIdentityKey).map((entry) => [
+          resolveModelCatalogIdentityKey(entry),
+          entry,
+        ]),
+      )
+    : undefined;
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
@@ -1399,9 +1408,8 @@ export function buildConfiguredModelCatalog(params: {
         continue;
       }
       // Provider defaults are fallbacks; only a model-level pin overrides its captured route.
-      const identity = resolveModelCatalogIdentityKey({ provider: providerId, id });
-      const accepted = params.catalog?.find(
-        (entry) => resolveModelCatalogIdentityKey(entry) === identity,
+      const accepted = capturedByIdentity?.get(
+        resolveModelCatalogIdentityKey({ provider: providerId, id }),
       );
       const api = model.api ?? accepted?.api ?? provider.api;
       const baseUrl = model.baseUrl ?? accepted?.baseUrl ?? provider.baseUrl;
