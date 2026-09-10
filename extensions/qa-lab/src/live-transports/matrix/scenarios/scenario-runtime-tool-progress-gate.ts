@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { constants } from "node:fs";
-import { open, rm } from "node:fs/promises";
+import { open, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
@@ -12,39 +12,64 @@ const execFile = promisify(execFileCallback);
 
 export async function prepareMatrixMentionProgressGate(
   context: Pick<MatrixQaScenarioContext, "gatewayWorkspaceDir">,
+  options: { releaseTimeoutMs?: number } = {},
 ) {
   if (!context.gatewayWorkspaceDir) {
     throw new Error("Matrix mention-safety progress requires a Gateway workspace directory.");
   }
   const gatePath = path.join(context.gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME);
+  const releaseTimeoutMs = options.releaseTimeoutMs ?? 10_000;
   await rm(gatePath, { force: true });
   await execFile("mkfifo", [gatePath]);
-  const gate = await open(gatePath, constants.O_RDWR);
   let closed = false;
-  let released = false;
-  const close = async () => {
+  let releaseError: Error | undefined;
+  let releasePromise: Promise<void> | undefined;
+  const release = async () => {
+    if (releaseError) {
+      throw releaseError;
+    }
+    if (!releasePromise) {
+      releasePromise = writeFile(gatePath, "matrix-progress-observed\n", "utf8");
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        releasePromise.then(() => "released" as const),
+        new Promise<"timed-out">((resolve) => {
+          timeout = setTimeout(() => resolve("timed-out"), releaseTimeoutMs);
+        }),
+      ]);
+      if (outcome === "released") {
+        return;
+      }
+      const drain = await open(gatePath, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        await releasePromise;
+      } finally {
+        await drain.close();
+      }
+      releaseError = new Error(
+        `Matrix mention progress FIFO had no reader after ${releaseTimeoutMs}ms.`,
+      );
+      throw releaseError;
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  };
+  const cleanup = async () => {
     if (closed) {
       return;
     }
     closed = true;
-    await gate.close();
-  };
-  const release = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
     try {
-      await gate.writeFile("matrix-progress-observed\n", "utf8");
+      if (releasePromise) {
+        await releasePromise;
+      } else {
+        await Promise.all([readFile(gatePath), release()]);
+      }
     } finally {
-      await close();
-    }
-  };
-  const cleanup = async () => {
-    try {
-      await release();
-    } finally {
-      await close().catch(() => undefined);
       await rm(gatePath, { force: true });
     }
   };

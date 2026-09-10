@@ -1,6 +1,7 @@
 // QA Lab Matrix plugin module implements tool-progress scenarios.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { QaSuiteScenarioSkipError } from "../../../errors.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   advanceMatrixQaActorCursor,
@@ -413,6 +414,11 @@ export async function runToolProgressErrorScenario(context: MatrixQaScenarioCont
 }
 
 export async function runToolProgressMentionSafetyScenario(context: MatrixQaScenarioContext) {
+  if (process.platform === "win32") {
+    throw new QaSuiteScenarioSkipError(
+      "Matrix tool progress mention safety requires POSIX FIFO support.",
+    );
+  }
   return runMatrixToolProgressScenario(context, {
     expectedPreviewKind: "message",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE"),
