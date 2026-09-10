@@ -221,7 +221,11 @@ export function assertUninstalled(pluginId: string, env: ProbeEnv = process.env)
   );
 }
 
-function assertRemovedChildPolicy(pluginId: string, env: ProbeEnv = process.env) {
+function assertRemovedChildPolicy(
+  pluginId: string,
+  env: ProbeEnv = process.env,
+  options: { expectDisabledMarker?: boolean } = {},
+) {
   const cfg = requiredConfig(env) as {
     plugins?: {
       allow?: string[];
@@ -231,7 +235,14 @@ function assertRemovedChildPolicy(pluginId: string, env: ProbeEnv = process.env)
       slots?: { memory?: string; contextEngine?: string };
     };
   };
-  assertProbe(!cfg.plugins?.entries?.[pluginId], `plugin entry survived for ${pluginId}`);
+  if (options.expectDisabledMarker) {
+    assertProbe(
+      isExplicitPluginDisableMarker(cfg, pluginId),
+      `exact disabled uninstall marker missing for ${pluginId}`,
+    );
+  } else {
+    assertProbe(!cfg.plugins?.entries?.[pluginId], `plugin entry survived for ${pluginId}`);
+  }
   assertProbe(
     !(cfg.plugins?.allow ?? []).includes(pluginId),
     `allow policy survived for ${pluginId}`,
@@ -895,7 +906,10 @@ async function runPluginLifecycleMatrix() {
       runEnv,
     );
     assertProbe(!recordFor(packOwner, runEnv), `install record still present for ${packOwner}`);
-    for (const removedPluginId of [packOwner, packOne, packTwo, packOld, packRenamed]) {
+    for (const currentPluginId of [packOne, packRenamed]) {
+      assertRemovedChildPolicy(currentPluginId, runEnv, { expectDisabledMarker: true });
+    }
+    for (const removedPluginId of [packOwner, packTwo, packOld]) {
       assertRemovedChildPolicy(removedPluginId, runEnv);
     }
     assertProbe(
