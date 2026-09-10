@@ -5,17 +5,33 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { prepareNodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import { stageSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
+import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["completed", "receiving"] as const)(
-  "disposes an abandoned %s publication upload before the next checkpoint",
+it.each([
+  "completed",
+  "receiving",
+  "receiving-failure",
+  "publication-cleanup-failure",
+  "checkpoint-cleanup-failure",
+] as const)(
+  "preserves prepared checkpoint cleanup custody and successful retries after %s",
   async (boundary) => {
+    const receivingUpload = boundary.startsWith("receiving");
+    const cleanupFailure = boundary.endsWith("cleanup-failure");
     const root = tempDirs.make("node-publication-disposal-");
     const workspaceDir = path.join(root, "worker");
     const home = path.join(root, "home");
@@ -56,6 +72,30 @@ it.each(["completed", "receiving"] as const)(
     if (!base.manifest.baseCommit) {
       throw new Error("Repository fixture has no base commit");
     }
+    const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
+    const store = createSessionRepositoryWorkspaceStore({ database });
+    const created = store.create({
+      agentId: "main",
+      sessionKey: "agent:main:publication",
+      url: "https://github.com/example/project.git",
+      assertCurrent: () => {},
+    });
+    const repository = store.bindBase({
+      workspaceId: created.workspaceId,
+      expectedRevision: created.revision,
+      baseCommit: base.manifest.baseCommit,
+      baseManifestHash: base.manifestRef,
+      assertCurrent: () => {},
+    });
+    const artifactRoot = store.artifactPath(repository.workspaceId);
+    await fs.mkdir(artifactRoot, { recursive: true });
+    await requireWorkspaceResultGit(artifactRoot, ["init", "--quiet", "--bare"]);
+    const candidates = () =>
+      requireWorkspaceResultGit(artifactRoot, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/worker-result-candidates/",
+      ]);
     const manifests = path.join(home, ".openclaw-worker", "manifests");
     await fs.mkdir(manifests, { recursive: true });
     await fs.writeFile(path.join(manifests, `${base.manifestRef.slice(7)}.json`), base.rawManifest);
@@ -76,15 +116,31 @@ it.each(["completed", "receiving"] as const)(
     const server = await startNodeWorkspaceTransferTestServer(service);
     const receiving = createDeferred();
     const release = createDeferred();
-    const checkpointPrepared = createDeferred();
+    const discardStarted = createDeferred();
+    const discardUpload = service.discardUpload.bind(service);
+    vi.spyOn(service, "discardUpload").mockImplementation(async (...args) => {
+      discardStarted.resolve();
+      await discardUpload(...args);
+    });
     let publicationActive = false;
-    let failPublication = true;
+    let failPublication = !cleanupFailure;
     let blocked = false;
+    let cleanupRoot: string | undefined;
+    const cleanupError = new Error("Taken upload staging cleanup failed");
+    let failCleanup = cleanupFailure;
+    const remove = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      if (cleanupRoot && args[0] === cleanupRoot && failCleanup) {
+        failCleanup = false;
+        throw cleanupError;
+      }
+      await remove(...args);
+    });
     let uploadOutcome: Promise<"completed" | "rejected"> | undefined;
     const realpath = fs.realpath.bind(fs);
     vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
       if (
-        boundary === "receiving" &&
+        receivingUpload &&
         publicationActive &&
         !blocked &&
         typeof args[0] === "string" &&
@@ -93,6 +149,9 @@ it.each(["completed", "receiving"] as const)(
         blocked = true;
         receiving.resolve();
         await release.promise;
+        if (boundary === "receiving-failure") {
+          throw new Error("Publication staging validation failed during disposal");
+        }
       }
       return await realpath(...args);
     });
@@ -132,7 +191,7 @@ it.each(["completed", "receiving"] as const)(
             () => "completed",
             () => "rejected",
           );
-          if (boundary === "receiving") {
+          if (receivingUpload) {
             await withTestTimeout(receiving.promise, 5_000, "publication never reached staging");
           } else {
             expect(await uploadOutcome).toBe("completed");
@@ -159,13 +218,29 @@ it.each(["completed", "receiving"] as const)(
         };
       },
     });
-    const checkpoint = vi.fn(async (payload: { stagingRoot: string }) => {
+    const checkpoint: Extract<
+      WorkerWorkspaceReconcileRequest["source"],
+      { kind: "repository" }
+    >["prepareCheckpoint"] = async (payload) => {
       expect(await fs.readFile(path.join(payload.stagingRoot, "result.txt"), "utf8")).toBe(
         "checkpoint edit\n",
       );
-      checkpointPrepared.resolve();
-      return { verify: async () => {}, publish: async () => {}, discard: async () => {} };
-    });
+      const prepared = await stageSessionRepositoryCheckpoint({
+        ...payload,
+        store,
+        workspaceId: repository.workspaceId,
+        expectedRevision: store.get(repository.workspaceId)!.revision,
+        assertCurrent: () => {},
+      });
+      if (cleanupFailure) {
+        cleanupRoot =
+          boundary === "publication-cleanup-failure"
+            ? payload.publicationStagingRoot
+            : payload.stagingRoot;
+        expect(cleanupRoot).toBeDefined();
+      }
+      return prepared;
+    };
     const reconcile = () =>
       actions.reconcileWorkspace({
         remoteWorkspaceDir: workspaceDir,
@@ -177,10 +252,22 @@ it.each(["completed", "receiving"] as const)(
         },
       });
     let first: ReturnType<typeof reconcile> | undefined;
+    const accept = async (pending: ReturnType<typeof reconcile>) => {
+      const result = await pending;
+      try {
+        expect(result.changed).toBe(true);
+        await result.verifyLocalStable();
+        await result.publishStagedResult?.();
+        expect(store.get(repository.workspaceId)?.manifestHash).toBe(result.manifestRef);
+      } finally {
+        await result.discardPreparedStagedResult?.();
+      }
+      expect(await candidates()).toBe("");
+    };
     try {
       await actions.validateRestoredWorkspace();
       first = reconcile();
-      if (boundary === "receiving") {
+      if (receivingUpload) {
         let settled = false;
         void first.then(
           () => {
@@ -190,31 +277,48 @@ it.each(["completed", "receiving"] as const)(
             settled = true;
           },
         );
-        await withTestTimeout(checkpointPrepared.promise, 5_000, "checkpoint was not prepared");
+        await withTestTimeout(discardStarted.promise, 5_000, "publication disposal did not start");
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
         expect.soft(settled, "reconciliation must join abandoned staging work").toBe(false);
         release.resolve();
       }
-      expect((await first).changed).toBe(true);
-      if (boundary === "receiving") {
+      if (boundary === "receiving-failure" || cleanupFailure) {
+        if (cleanupFailure) {
+          await expect(first).rejects.toBe(cleanupError);
+        } else {
+          await expect(first).rejects.toThrow("payload did not match its staged result");
+        }
+        expect(store.get(repository.workspaceId)?.checkpointRef).toBeNull();
+        expect(await candidates(), "failed handoff must not strand prepared checkpoint refs").toBe(
+          "",
+        );
+      } else {
+        await accept(first);
+      }
+      if (receivingUpload) {
         expect(await uploadOutcome).toBe("rejected");
       }
-      expect(
-        (await fs.readdir(temporaryRoot, { recursive: true })).filter((entry) =>
-          path.basename(entry).startsWith("upload-"),
-        ),
-      ).toEqual([]);
+      if (cleanupFailure) {
+        expect((await fs.stat(cleanupRoot!)).isDirectory()).toBe(true);
+      } else {
+        expect(
+          (await fs.readdir(temporaryRoot, { recursive: true })).filter((entry) =>
+            path.basename(entry).startsWith("upload-"),
+          ),
+        ).toEqual([]);
+      }
       failPublication = false;
-      expect((await reconcile()).changed).toBe(true);
-      expect(checkpoint).toHaveBeenCalledTimes(2);
+      await accept(reconcile());
     } finally {
       release.resolve();
       await first?.catch(() => undefined);
       await uploadOutcome;
       await service.closeAll();
       await server.close();
+      closeOpenClawStateDatabaseByPath(database.path);
     }
+    await expect(fs.stat(temporaryRoot)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );

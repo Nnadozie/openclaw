@@ -152,6 +152,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       params.environmentId,
       request.baseManifestRef,
     );
+    let preparedCheckpoint: { discard: () => Promise<void> } | undefined;
     try {
       const result = await exec({
         argv: ["openclaw-internal-workspace-transfer"],
@@ -229,6 +230,10 @@ export function createNodeWorkerWorkspaceActions(params: {
             workspaceLog.warn(
               `Repository publication capture unavailable: ${boundedWorkerError(error)}`,
             );
+          } finally {
+            if (publicationToken) {
+              await params.workspaceTransfer.discardUpload(params.environmentId, publicationToken);
+            }
           }
           // Publication restrictions never own recovery acceptance. Its remote
           // stability, live owner and final quiescence fences still run below.
@@ -243,6 +248,7 @@ export function createNodeWorkerWorkspaceActions(params: {
             baseManifestRef: uploaded.baseManifestRef,
             currentManifestRef: uploaded.currentManifestRef,
           });
+          preparedCheckpoint = prepared;
           return {
             manifestRef: uploaded.currentManifestRef,
             changed: uploaded.currentManifestRef !== uploaded.baseManifestRef,
@@ -254,9 +260,6 @@ export function createNodeWorkerWorkspaceActions(params: {
             discardPreparedStagedResult: () => prepared.discard(),
           };
         } finally {
-          if (publicationToken) {
-            await params.workspaceTransfer.discardUpload(params.environmentId, publicationToken);
-          }
           if (publication) {
             await fsp.rm(publication.stagingRoot, { recursive: true, force: true });
           }
@@ -264,6 +267,18 @@ export function createNodeWorkerWorkspaceActions(params: {
       } finally {
         await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
       }
+    } catch (error) {
+      // Finalizers can reject before the caller receives the checkpoint's disposer.
+      try {
+        await preparedCheckpoint?.discard();
+      } catch (discardError) {
+        throw new AggregateError(
+          [error, discardError],
+          "Repository checkpoint handoff cleanup failed",
+          { cause: discardError },
+        );
+      }
+      throw error;
     } finally {
       params.workspaceTransfer.revoke(params.environmentId, token);
     }
