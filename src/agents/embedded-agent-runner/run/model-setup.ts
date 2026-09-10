@@ -1,3 +1,5 @@
+// @fork-seam U6 — the fork's live per-node model-selection call-site.
+import { applyRunNodeModelSelection } from "../../../fork/per-node-model/selection.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { FailoverError } from "../../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../harness/runtime-plugin.js";
@@ -40,8 +42,25 @@ export async function resolveEmbeddedRunModelSetup(params: {
   const modelSelectionChangedByHook =
     hookSelection.provider !== params.provider || hookSelection.modelId !== params.modelId;
   let provider = hookSelection.provider;
-  const modelId = hookSelection.modelId;
+  let modelId = hookSelection.modelId;
   const requestedModelId = modelId;
+  // @fork-seam U6 — per-node model selection at launch. Opt-in: with no
+  // `fork.nodes` block `applied` is false and the hook/stock selection passes
+  // through untouched. An explicit per-run model or a hook-changed model always
+  // wins. Fail-safe: a malformed block leaves the stock resolution in place.
+  const nodeModelSelection = applyRunNodeModelSelection({
+    config: runParams.config,
+    agentId: runParams.agentId,
+    sessionKey: runParams.sessionKey,
+    modelSelectionChangedByHook,
+    explicitModel: runParams.model,
+    provider,
+    modelId,
+  });
+  if (nodeModelSelection.applied) {
+    provider = nodeModelSelection.provider;
+    modelId = nodeModelSelection.modelId;
+  }
   const requestStreamTransportOverrides = resolveRequestStreamTransportOverrides(
     runParams.streamParams,
   );
