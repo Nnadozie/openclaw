@@ -4,6 +4,7 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { applyForkRuntime, setForkRuntimeBinding } from "../fork/runtime.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
@@ -479,6 +480,11 @@ export function startManagedGatewayConfigReloader(
       }
     },
     onConfigApplied: (plan, nextConfig) => {
+      // @fork-seam U1,U11,U12 — bind the fork seams on the live config-commit
+      // path. Inert for stock installs (no `fork{}` block → configured:false).
+      // Fail-closed and opt-in: a present-but-invalid policy throws here, and
+      // the resulting binding never ALLOWs without an armed guard.
+      setForkRuntimeBinding(applyForkRuntime(nextConfig));
       // Applied runtime identity owns config-derived process memos; accepted
       // source-only changes must not evict caches for the still-active config.
       if (plan.changedPaths.some((path) => path === "logging" || path.startsWith("logging."))) {
