@@ -121,6 +121,11 @@ export class ForkEthicsPolicy {
     return this.policy.version;
   }
 
+  /** The raw rule for a capability, or undefined when the capability is unknown. */
+  ruleFor(capability: string): CapabilityRule | undefined {
+    return this.policy.capabilities.find((c) => c.capability === capability);
+  }
+
   /** True when the capability must be denied absent an explicit allow. */
   denyByDefault(capability: string): boolean {
     const rule = this.policy.capabilities.find((c) => c.capability === capability);

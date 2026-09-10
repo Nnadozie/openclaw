@@ -506,4 +506,7 @@ export const OpenClawSchemaShape = {
     )
     .optional(),
   proxy: ProxyConfigSchema,
+  // @fork-seam U1,U11 — additive fork config block (opt-in; absent = stock behaviour).
+  // Kept permissive: stock OpenClaw ignores this key entirely (ADR-F-1).
+  fork: z.record(z.string(), z.unknown()).optional(),
 };

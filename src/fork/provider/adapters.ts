@@ -5,7 +5,6 @@
 // shape for the same semantic fixture (1:1 behaviour-preserving swap).
 import { REDACTED } from "./redact.js";
 import type {
-  AdapterRequest,
   AdapterResponse,
   AdapterWireRequest,
   ForkModelAdapter,

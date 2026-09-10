@@ -68,7 +68,7 @@ export class ForkProviderService implements ForkProviderSeam {
     }
     this.active = this.loadState();
     if (!this.active && opts.models && opts.models.length > 0) {
-      this.active = opts.models[0];
+      this.active = opts.models[0] ?? null;
     }
   }
 

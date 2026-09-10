@@ -4,7 +4,7 @@
 // config block; when that block is absent nothing is constructed and stock
 // behaviour is untouched (opt-in, additive — ADR-F-1 / ADR-U1-1).
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ForkProviderService, type ProviderSeamOptions } from "./service.js";
 import type { ForkModelConfig } from "./types.js";
 
