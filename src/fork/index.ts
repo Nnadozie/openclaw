@@ -11,6 +11,8 @@ import type { ForkDiscernmentSeam } from "./ethics/discernment.js";
 import { createEthicsSeam, type EthicsSeam } from "./ethics/index.js";
 import { createProviderSeam } from "./provider/index.js";
 import type { ForkProviderSeam } from "./provider/types.js";
+import { createSelfUpgradeSeam, type SelfUpgradeSeam } from "./self-upgrade/index.js";
+import { ImprovementStager } from "./self-upgrade/stage.js";
 
 export interface ForkSeams {
   /** U1 — provider-agnostic LLM seam (BYOK + cost-aware routing). */
@@ -19,6 +21,8 @@ export interface ForkSeams {
   discernment: ForkDiscernmentSeam | null;
   /** U11 — Jesuit ethics core (discernment guard + devotion scheduler). */
   ethics: EthicsSeam | null;
+  /** U2 — self-upgrading loop (safe, gated). Null when the config block is off. */
+  selfUpgrade: SelfUpgradeSeam | null;
 }
 
 /**
@@ -36,7 +40,30 @@ export function createForkSeams(
     provider: createProviderSeam(config, { statePath: providerStatePath(opts.stateDir) }),
     discernment: ethics?.discernment ?? null,
     ethics,
+    // U2 self-upgrade is opt-in and inert until a caller supplies real stage/app
+    // deps; constructing the seam here is the production call-site (Tier-2).
+    selfUpgrade: createSelfUpgradeSeam(config, selfUpgradeDeps(opts.stateDir)),
   };
+}
+
+/**
+ * U2 self-upgrade dependencies. The stage/apply behaviour is injected by the
+ * gateway's runtime wiring; here we provide fail-closed no-op deps so the seam
+ * is constructible (and inert) without a runtime backer. A real deployment
+ * supplies materialize/validate/apply that operate on the fork tree.
+ */
+function selfUpgradeDeps(stateDir: string | undefined) {
+  const base = stateDir ?? process.env.OPENCLAW_STATE_DIR ?? ".";
+  // Fail-closed defaults: the seam is constructible from config but inert until
+  // the gateway runtime supplies real materialize/validate/apply. The validate
+  // default returns a refusal so nothing ever promotes on these no-op deps.
+  const stager = new ImprovementStager({
+    liveRoot: base,
+    workRoot: `${base}/fork/stage`,
+    materialize: async () => [],
+    validate: async () => ({ ok: false, errors: ["no runtime validator wired"] }),
+  });
+  return { stager, apply: async () => {} };
 }
 
 function providerStatePath(stateDir: string | undefined): string {
