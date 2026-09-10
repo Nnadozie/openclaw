@@ -109,6 +109,7 @@ export {
   buildMatrixToolProgressPrompt,
   buildMatrixToolProgressTaskContent,
   buildMentionPrompt,
+  MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME,
   MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME,
 } from "./scenario-runtime-prompts.js";
 
