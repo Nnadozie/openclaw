@@ -14,7 +14,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
 import * as sqliteCapture from "./backup-sqlite-snapshot.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { requireNodeSqlite, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 
 const runtime: RuntimeEnv = { log: () => {}, error: () => {}, exit: () => {} };
 afterEach(() => {
@@ -277,7 +277,9 @@ describe("full backup config include capture", () => {
           { value: "captured" },
           { value: "later" },
         ]);
-        const copy = new DatabaseSync(restoredPath(dbPath), { readOnly: true });
+        const copy = new DatabaseSync(resolveSqliteFilesystemPath(restoredPath(dbPath)), {
+          readOnly: true,
+        });
         try {
           expect(copy.prepare("SELECT value FROM proof").all()).toEqual([{ value: "captured" }]);
         } finally {
