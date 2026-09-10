@@ -255,7 +255,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           };
         } finally {
           if (publicationToken) {
-            params.workspaceTransfer.revoke(params.environmentId, publicationToken);
+            await params.workspaceTransfer.discardUpload(params.environmentId, publicationToken);
           }
           if (publication) {
             await fsp.rm(publication.stagingRoot, { recursive: true, force: true });
