@@ -328,9 +328,8 @@ export async function writeLaunchAgentPlist({
     programArguments: prepared.programArguments,
     workingDirectory,
     stdoutPath,
-    // launchd has no stream-merge option, so both handles target one file.
-    // Diagnostics reads only stdout on darwin (readLastGatewayErrorLine);
-    // a separate stderr target would silently drop startup crash output.
+    // Both handles target one file: launchd cannot merge streams, and darwin
+    // diagnostics reads only stdout (readLastGatewayErrorLine).
     stderrPath: stdoutPath,
     environment: prepared.inlineEnvironment,
   });
@@ -384,9 +383,8 @@ export async function rewriteLaunchAgentPlistForRestart({
     programArguments: prepared.programArguments,
     workingDirectory: existing.workingDirectory,
     stdoutPath,
-    // launchd has no stream-merge option, so both handles target one file.
-    // Diagnostics reads only stdout on darwin (readLastGatewayErrorLine);
-    // a separate stderr target would silently drop startup crash output.
+    // Both handles target one file: launchd cannot merge streams, and darwin
+    // diagnostics reads only stdout (readLastGatewayErrorLine).
     stderrPath: stdoutPath,
     environment: prepared.inlineEnvironment,
   });
