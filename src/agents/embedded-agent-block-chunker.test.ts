@@ -103,6 +103,22 @@ describe("EmbeddedBlockChunker", () => {
     expect(drainChunks(chunker, true)).toEqual(["Tail"]);
   });
 
+  it("reports original source across synthetic wrappers and a consumed closing fence", () => {
+    const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 20 });
+    const delivered: Array<{ text: string; sourceText?: string }> = [];
+    chunker.append("```txt\nabcdefghijklmnopqr\n```\n\nTail");
+    chunker.drain({
+      force: true,
+      emit: (text, options) => delivered.push({ text, sourceText: options?.sourceText }),
+    });
+
+    expect(delivered).toEqual([
+      { text: "```txt\nabcdefghi\n```", sourceText: "```txt\nabcdefghi" },
+      { text: "```txt\njklmnopqr\n```", sourceText: "jklmnopqr\n```\n\n" },
+      { text: "Tail", sourceText: "Tail" },
+    ]);
+  });
+
   it.each([
     { tail: "Tail", changed: false, expected: ["Tail"] },
     { tail: "", changed: true, expected: [] },

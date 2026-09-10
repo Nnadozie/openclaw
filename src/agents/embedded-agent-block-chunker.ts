@@ -190,7 +190,10 @@ export class EmbeddedBlockChunker {
   }
 
   /** Emit safe chunks according to size and Markdown fence constraints. */
-  drain(params: { force: boolean; emit: (chunk: string) => void }) {
+  drain(params: {
+    force: boolean;
+    emit: (chunk: string, options?: { sourceText: string }) => void;
+  }) {
     // KNOWN: We cannot split inside fenced code blocks (Markdown breaks + UI glitches).
     // When forced (maxChars), we close + reopen the fence to keep Markdown valid.
     const { force, emit } = params;
@@ -208,7 +211,7 @@ export class EmbeddedBlockChunker {
 
     if (!chunking || (force && source.length <= maxChars && !this.#reopenPrefix)) {
       if (!chunking || source.trim().length > 0) {
-        emit(source);
+        emit(source, { sourceText: this.#buffer });
       }
       this.#consumedLength += this.#buffer.length;
       this.#buffer = "";
@@ -245,6 +248,16 @@ export class EmbeddedBlockChunker {
       fence.end -= removedLength;
       removedFenceInfoLength += removedLength;
     }
+    const sourceOffset = (index: number) =>
+      Math.max(
+        0,
+        removedFenceInfo.reduce(
+          (offset, removed) => offset + (removed.at <= index ? removed.length : 0),
+          index,
+        ) - this.#reopenPrefix.length,
+      );
+    const emitSourceChunk = (chunk: string, from: number, to: number) =>
+      emit(chunk, { sourceText: this.#buffer.slice(sourceOffset(from), sourceOffset(to)) });
     let start = 0;
     let reopenFence: FenceSplit | undefined;
     const resumedFence = this.#reopenPrefix ? fenceSpans[0] : undefined;
@@ -273,10 +286,14 @@ export class EmbeddedBlockChunker {
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
         if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
           const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
+          const nextStart = skipLeadingNewlines(
+            source,
+            paragraphBreak.index + paragraphBreak.length,
+          );
           if (chunk.trim().length > 0) {
-            emit(chunk);
+            emitSourceChunk(chunk, start, nextStart);
           }
-          start = skipLeadingNewlines(source, paragraphBreak.index + paragraphBreak.length);
+          start = nextStart;
           reopenFence = undefined;
           continue;
         }
@@ -300,22 +317,24 @@ export class EmbeddedBlockChunker {
             );
       if (breakResult.index <= 0) {
         if (force) {
-          emit(`${reopenPrefix}${source.slice(start)}`);
+          emitSourceChunk(`${reopenPrefix}${source.slice(start)}`, start, source.length);
           start = source.length;
           reopenFence = undefined;
         }
         break;
       }
 
-      const consumed = this.#emitBreakResult({
+      const consumed = this.#resolveBreakResult({
         breakResult,
-        emit,
         reopenPrefix,
         source,
         start,
       });
       if (consumed === null) {
         continue;
+      }
+      if (consumed.chunk) {
+        emitSourceChunk(consumed.chunk, start, consumed.start);
       }
       start = consumed.start;
       reopenFence = consumed.reopenFence;
@@ -335,24 +354,19 @@ export class EmbeddedBlockChunker {
     if (start === 0) {
       return;
     }
-    const sourceStart = removedFenceInfo.reduce(
-      (offset, removed) => offset + (removed.at <= start ? removed.length : 0),
-      start,
-    );
-    const consumed = Math.max(0, sourceStart - this.#reopenPrefix.length);
+    const consumed = sourceOffset(start);
     this.#consumedLength += consumed;
     this.#buffer = this.#buffer.slice(consumed);
     this.#reopenPrefix = reopenFence ? `${reopenFence.reopenFenceLine}\n` : "";
   }
 
-  #emitBreakResult(params: {
+  #resolveBreakResult(params: {
     breakResult: BreakResult;
-    emit: (chunk: string) => void;
     reopenPrefix: string;
     source: string;
     start: number;
-  }): { start: number; reopenFence?: FenceSplit } | null {
-    const { breakResult, emit, reopenPrefix, source, start } = params;
+  }): { chunk?: string; start: number; reopenFence?: FenceSplit } | null {
+    const { breakResult, reopenPrefix, source, start } = params;
     const breakIdx = breakResult.index;
     if (breakIdx <= 0) {
       return null;
@@ -372,23 +386,25 @@ export class EmbeddedBlockChunker {
       rawChunk = `${rawChunk}${closeFence}`;
     }
 
-    emit(rawChunk);
-
     if (fenceSplit) {
       const closeFenceStart = findFenceCloseLineStart(source, fenceSplit.fence);
       if (absoluteBreakIdx === closeFenceStart) {
         // The synthetic closer already owns this boundary; replaying the source
         // closer after reopening would publish an empty fenced-code message.
-        return { start: skipLeadingNewlines(source, fenceSplit.fence.end) };
+        return { chunk: rawChunk, start: skipLeadingNewlines(source, fenceSplit.fence.end) };
       }
-      return { start: absoluteBreakIdx, reopenFence: fenceSplit };
+      return { chunk: rawChunk, start: absoluteBreakIdx, reopenFence: fenceSplit };
     }
 
     const nextStart =
       absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
         ? absoluteBreakIdx + 1
         : absoluteBreakIdx;
-    return { start: skipLeadingNewlines(source, nextStart), reopenFence: undefined };
+    return {
+      chunk: rawChunk,
+      start: skipLeadingNewlines(source, nextStart),
+      reopenFence: undefined,
+    };
   }
 
   #pickSoftBreakIndex(
