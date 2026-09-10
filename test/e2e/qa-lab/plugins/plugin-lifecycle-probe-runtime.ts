@@ -894,11 +894,10 @@ async function runPluginLifecycleMatrix() {
       [entry, "plugins", "uninstall", packOne, "--force"],
       runEnv,
     );
-    assertUninstalled(packOwner, runEnv);
-    assertUninstalled(packOne, runEnv);
-    assertUninstalled(packTwo, runEnv);
-    assertUninstalled(packOld, runEnv);
-    assertUninstalled(packRenamed, runEnv);
+    assertProbe(!recordFor(packOwner, runEnv), `install record still present for ${packOwner}`);
+    for (const removedPluginId of [packOwner, packOne, packTwo, packOld, packRenamed]) {
+      assertRemovedChildPolicy(removedPluginId, runEnv);
+    }
     assertProbe(
       !fs.existsSync(packInstallPath),
       `pack install directory still exists after child-addressed uninstall: ${packInstallPath}`,
