@@ -7,6 +7,7 @@
 // It is intentionally dependency-light and side-effect-free: callers construct
 // what they need, lazily.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ForkDiscernmentSeam } from "./ethics/discernment.js";
 import { createEthicsSeam, type EthicsSeam } from "./ethics/index.js";
 import { createProviderSeam } from "./provider/index.js";
 import type { ForkProviderSeam } from "./provider/types.js";
@@ -14,6 +15,8 @@ import type { ForkProviderSeam } from "./provider/types.js";
 export interface ForkSeams {
   /** U1 — provider-agnostic LLM seam (BYOK + cost-aware routing). */
   provider: ForkProviderSeam;
+  /** U11b — discernment guard surface (null when the ethics block is off). */
+  discernment: ForkDiscernmentSeam | null;
   /** U11 — Jesuit ethics core (discernment guard + devotion scheduler). */
   ethics: EthicsSeam | null;
 }
@@ -28,9 +31,11 @@ export function createForkSeams(
   config: OpenClawConfig | undefined,
   opts: { stateDir?: string } = {},
 ): ForkSeams {
+  const ethics = createEthicsSeam(config, opts);
   return {
     provider: createProviderSeam(config, { statePath: providerStatePath(opts.stateDir) }),
-    ethics: createEthicsSeam(config, opts),
+    discernment: ethics?.discernment ?? null,
+    ethics,
   };
 }
 
