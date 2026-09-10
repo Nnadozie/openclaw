@@ -5,7 +5,7 @@
 // by default: `allowUnattended` is required before the pipeline will promote a
 // candidate without a canary, and money/auth candidates always need approval.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { detectVersion, isNewer } from "./detect.js";
+import { detectVersion } from "./detect.js";
 import { ForkUpgradePipeline } from "./pipeline.js";
 import type { ApplyResult, CurrencyCandidate, UpgradeValidation } from "./types.js";
 

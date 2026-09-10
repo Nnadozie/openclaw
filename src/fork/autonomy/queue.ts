@@ -109,7 +109,7 @@ export class ForkWorkQueue {
    * successor is supplied one is synthesised from `fallbackAction`; with neither,
    * completion is refused (throw) rather than emptying the queue.
    */
-  complete(id: string, successor?: QueueItem): QueueItem {
+  complete(id: string, successor?: Partial<QueueItem> & { id: string; action: string }): QueueItem {
     const item = this.require(id);
     if (!successor && !this.opts.fallbackAction) {
       throw new EmptyQueueError(
@@ -121,7 +121,7 @@ export class ForkWorkQueue {
     item.updatedAt = at;
 
     const succ: QueueItem = successor
-      ? { createdAt: at, updatedAt: at, status: "todo", ...successor }
+      ? { ...successor, status: "todo", createdAt: at, updatedAt: at }
       : {
           id: this.nextId(),
           status: "todo",

@@ -66,7 +66,7 @@ export interface WorkQueueOptions {
 export interface ForkWorkQueueSeam {
   add(action: string, id?: string): QueueItem;
   next(): QueueItem | null;
-  complete(id: string, successor?: QueueItem): QueueItem;
+  complete(id: string, successor?: Partial<QueueItem> & { id: string; action: string }): QueueItem;
   block(id: string, reason: string): void;
   unblock(id: string): void;
   assertNonEmpty(): void;

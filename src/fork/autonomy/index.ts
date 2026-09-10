@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ForkDriver } from "./driver.js";
 import { ForkHeartbeatInitiative } from "./heartbeat.js";
 import { ForkWorkQueue } from "./queue.js";
-import type { AutonomyConfig, ForkWorkQueueSeam } from "./types.js";
+import type { AutonomyConfig } from "./types.js";
 import { ForkWatchdog } from "./watchdog.js";
 
 /** Minimal shape of the additive `fork` config block (kept permissive). */

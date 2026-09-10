@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.core.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": ".artifacts/fork-check.tsbuildinfo",
+    "incremental": false
+  },
+  "include": ["src/fork/**/*"],
+  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
+}
