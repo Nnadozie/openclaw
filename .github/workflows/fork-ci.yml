@@ -1,0 +1,66 @@
+name: OpenClaw+ fork CI
+
+# OpenClaw+ (fork) verifiable gate — the MISSING mechanical verification for the fork.
+# Runs OFF the box so the prod host never carries a heavy build/test. Typechecks the fork
+# source, runs the fork unit suite, builds the distribution, and enforces the
+# contract-coverage discipline gate.
+#
+# WHY A SEPARATE WORKFLOW: `.github/workflows/ci.yml` is the inherited upstream OpenClaw
+# mega-CI (263 KB) — we do NOT clobber it. This file is the fork's own additive gate,
+# mirroring the box repo's `selfserve/control-plane` CI pattern (typecheck → build → test →
+# gate) but scoped to `src/fork/**`. No deploy. Read-only.
+
+on:
+  push:
+    branches: [main, 'ignacio/**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: fork-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fork-check:
+    name: typecheck + test + build + coverage guard (src/fork)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.0.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Fork-scoped typecheck. `tsconfig.fork-check.json` includes only `src/fork/**/*`
+      # (excludes tests) and extends the core tsconfig, so it validates the seam types
+      # against the real core types without a full-repo incremental build.
+      - name: Typecheck fork source (tsgo)
+        run: node scripts/run-tsgo.mjs -p tsconfig.fork-check.json --tsBuildInfoFile .artifacts/fork-check.tsbuildinfo
+
+      # Fork-scoped unit tests (no AWS, no provider keys — deterministic).
+      - name: Fork unit tests (vitest)
+        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts 'src/fork/**/*.test.ts'
+
+      # Build the distribution (verifiable gate the prod host must not run locally).
+      # The dist output is NOT deployed here; this only proves the fork builds clean.
+      - name: Build distribution
+        run: pnpm build
+
+      # Discipline gate: fails if any FEATURE-MATRIX row lacks a proof/test pointer, or any
+      # `@fork-seam` contract is type-only (no concrete impl invoked on a prod path).
+      - name: Contract-coverage discipline gate
+        run: bash scripts/ci/fork-coverage-guard.sh
