@@ -10,6 +10,7 @@ describe("configured catalog registry composition", () => {
     {
       mode: "merge",
       capturedBaseUrl: "https://fixture.invalid/v1",
+      capturedId: "selected",
       pin: false,
       expectedBaseUrl: "https://fixture.invalid/v1",
       expectedIds: ["selected", "retained-only"],
@@ -17,6 +18,7 @@ describe("configured catalog registry composition", () => {
     {
       mode: "replace",
       capturedBaseUrl: "https://fixture.invalid/v1",
+      capturedId: "selected",
       pin: false,
       expectedBaseUrl: "https://fixture.invalid/v1",
       expectedIds: ["selected"],
@@ -24,6 +26,7 @@ describe("configured catalog registry composition", () => {
     {
       mode: "merge",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
+      capturedId: "selected",
       pin: false,
       expectedBaseUrl: "http://127.0.0.1:9/v1",
       expectedIds: ["selected", "retained-only"],
@@ -31,6 +34,7 @@ describe("configured catalog registry composition", () => {
     {
       mode: "replace",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
+      capturedId: "selected",
       pin: false,
       expectedBaseUrl: "https://fixture.invalid/v1",
       expectedIds: ["selected"],
@@ -38,13 +42,22 @@ describe("configured catalog registry composition", () => {
     {
       mode: "merge",
       capturedBaseUrl: "http://127.0.0.1:9/v1",
+      capturedId: "selected",
       pin: true,
       expectedBaseUrl: "https://fixture.invalid/v1",
       expectedIds: ["selected", "retained-only"],
     },
+    {
+      mode: "merge",
+      capturedBaseUrl: "http://127.0.0.1:9/v1",
+      capturedId: "Selected",
+      pin: false,
+      expectedBaseUrl: "https://fixture.invalid/v1",
+      expectedIds: ["selected", "Selected", "retained-only"],
+    },
   ] as const)(
-    "keeps $mode rows and routes (captured=$capturedBaseUrl, pin=$pin)",
-    ({ mode, capturedBaseUrl, pin, expectedBaseUrl, expectedIds }) => {
+    "keeps $mode rows and routes (captured=$capturedId at $capturedBaseUrl, pin=$pin)",
+    ({ mode, capturedBaseUrl, capturedId, pin, expectedBaseUrl, expectedIds }) => {
       const configured: ModelCatalogEntry = {
         provider: "donor-fixture",
         id: "selected",
@@ -91,7 +104,7 @@ describe("configured catalog registry composition", () => {
               baseUrl: capturedBaseUrl,
               models: [
                 {
-                  id: "selected",
+                  id: capturedId,
                   name: "Earlier selected",
                   contextWindow: 64_000,
                   maxTokens: 4096,

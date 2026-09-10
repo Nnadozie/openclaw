@@ -20,7 +20,7 @@ import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
-import { findModelCatalogEntry, findModelInCatalog } from "./model-catalog-lookup.js";
+import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -1399,7 +1399,10 @@ export function buildConfiguredModelCatalog(params: {
         continue;
       }
       // Provider defaults are fallbacks; only a model-level pin overrides its captured route.
-      const accepted = findModelInCatalog(params.catalog ?? [], providerId, id);
+      const identity = resolveModelCatalogIdentityKey({ provider: providerId, id });
+      const accepted = params.catalog?.find(
+        (entry) => resolveModelCatalogIdentityKey(entry) === identity,
+      );
       const api = model.api ?? accepted?.api ?? provider.api;
       const baseUrl = model.baseUrl ?? accepted?.baseUrl ?? provider.baseUrl;
       const name = normalizeOptionalString(model?.name) || id;
