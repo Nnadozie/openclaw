@@ -4,10 +4,12 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { lt as semverLt, valid as validSemver } from "semver";
 import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
+import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
@@ -210,7 +212,9 @@ function parseJson(raw: string, label: string): unknown {
 }
 
 export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields {
-  const parsed = parseJson(raw, "npm view");
+  const value = parseJson(raw, "npm view");
+  const entries = resolveNpmJsonEntries(value);
+  const parsed = entries.length === 1 && isJsonRecord(entries[0]) ? entries[0] : value;
   if (Array.isArray(parsed)) {
     return {
       version: normalizeOptionalString(parsed[0]),
@@ -498,6 +502,43 @@ export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"):
     return response.status;
   } finally {
     await cancelResponseBody(response);
+  }
+}
+
+async function verifyNpmBetaFloor(packageNames: readonly string[]): Promise<void> {
+  const errors: string[] = [];
+  for (const packageName of packageNames) {
+    const entries = resolveNpmJsonEntries(
+      parseJson(
+        await runNpmViewWithRetry(["view", packageName, "dist-tags", "--json"]),
+        `npm view ${packageName} dist-tags`,
+      ),
+    );
+    const tags = entries.length === 1 ? entries[0] : undefined;
+    if (!isJsonRecord(tags)) {
+      throw new Error(`${packageName}: npm dist-tags returned an unsupported JSON shape.`);
+    }
+    // A package published only to beta has no stable floor yet.
+    if (tags.latest === undefined) {
+      continue;
+    }
+    const latest = normalizeOptionalString(tags.latest);
+    const beta = normalizeOptionalString(tags.beta);
+    const observed = `${packageName}: beta=${beta ?? JSON.stringify(tags.beta) ?? "<missing>"}, latest=${latest ?? JSON.stringify(tags.latest)}`;
+    if (
+      latest === undefined ||
+      !validSemver(latest) ||
+      (tags.beta !== undefined && (beta === undefined || !validSemver(beta)))
+    ) {
+      errors.push(`${observed} (invalid semver dist-tag)`);
+    } else if (beta === undefined || semverLt(beta, latest)) {
+      errors.push(observed);
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `npm beta must be at or above latest; release verification failed:\n${errors.join("\n")}\nRun the release ledger's npm dist-tag repair, then verify again.`,
+    );
   }
 }
 
@@ -1326,6 +1367,16 @@ export async function verifyBetaRelease(
     lines.push(`GitHub release OK: ${releaseUrl}`);
   }
 
+  const npmPlugins = collectPublishablePluginPackages(rootDir, {
+    packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
+  });
+  assertSelectedPackagesResolved({
+    label: "npm plugin",
+    selection: args.pluginSelection,
+    packages: npmPlugins,
+  });
+  await verifyNpmBetaFloor(["openclaw", ...npmPlugins.map((plugin) => plugin.packageName)]);
+
   const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
   lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
 
@@ -1340,14 +1391,6 @@ export async function verifyBetaRelease(
     lines.push("openclaw postpublish verifier OK");
   }
 
-  const npmPlugins = collectPublishablePluginPackages(rootDir, {
-    packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
-  });
-  assertSelectedPackagesResolved({
-    label: "npm plugin",
-    selection: args.pluginSelection,
-    packages: npmPlugins,
-  });
   for (const plugin of npmPlugins) {
     await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
   }
