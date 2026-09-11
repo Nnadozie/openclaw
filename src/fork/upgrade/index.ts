@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { detectVersion } from "./detect.js";
 import { ForkUpgradePipeline } from "./pipeline.js";
 import type { ApplyResult, CurrencyCandidate, UpgradeValidation } from "./types.js";
+import { detectUpstreamRelease, resolveInstalledVersion } from "./upstream.js";
 
 /** Minimal shape of the additive `fork.autoUpgrade` config block. */
 export interface AutoUpgradeConfig {
@@ -50,6 +51,13 @@ export interface AutoUpgradeSeam {
     summary?: string;
     touchesMoneyOrAuth?: boolean;
   }): Promise<ApplyResult | null>;
+  /**
+   * Check the REAL upstream detection source (installed version marker +
+   * release feed) and, when a newer upstream release is known, run it through
+   * the guarded pipeline. Returns null when the feed is missing/invalid/empty
+   * or nothing is newer (fail-closed).
+   */
+  considerUpstream(opts?: { current?: string; feedPath?: string }): Promise<ApplyResult | null>;
 }
 
 /**
@@ -93,10 +101,42 @@ export function createAutoUpgradeSeam(
       }
       return pipeline.run(candidate);
     },
+    async considerUpstream(opts) {
+      // Prefer an explicit override, then the config `current`, then the REAL
+      // installed-version marker. Only when all are absent do we fall back to
+      // "0.0.0" (which makes any real release strictly newer — but the pipeline
+      // still refuses to promote unless validate+canary are wired green).
+      const installed = opts?.current ?? block.current ?? resolveInstalledVersion();
+      const detected = detectUpstreamRelease({
+        current: installed,
+        feedPath: opts?.feedPath,
+      });
+      if (!detected) {
+        return null;
+      }
+      const candidate = detectVersion({
+        kind: "upstream_release",
+        current: installed,
+        available: detected.available,
+        summary: `upstream OpenClaw ${detected.available} available (current ${installed})`,
+      });
+      if (!candidate) {
+        return null;
+      }
+      return pipeline.run(candidate);
+    },
   };
 }
 
 export { ForkUpgradePipeline } from "./pipeline.js";
 export { compareVersions, detectVersion, isNewer } from "./detect.js";
 export { mayAutoApply, touchesCriticalPath } from "./guard.js";
+export {
+  detectUpstreamRelease,
+  newestNewer,
+  parseUpstreamFeed,
+  readUpstreamFeedFile,
+  resolveInstalledVersion,
+  UPSTREAM_FEED_FILE,
+} from "./upstream.js";
 export * from "./types.js";
