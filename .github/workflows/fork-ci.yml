@@ -33,8 +33,8 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 12.0.0
+        # No explicit `version`: read it from package.json `packageManager` (single source of
+        # truth). Passing both here AND in packageManager makes pnpm refuse to boot.
 
       - name: Setup Node
         uses: actions/setup-node@v4
