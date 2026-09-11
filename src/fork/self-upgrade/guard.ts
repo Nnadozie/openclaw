@@ -5,6 +5,7 @@
 // whose files touch a sensitive marker is refused (fail-closed) unless an
 // explicit approval is present. Mirrors U12's `guard.ts` philosophy — a
 // mis-labelled change must not slip through as safe.
+import path from "node:path";
 import type { Improvement } from "./types.js";
 
 /**
@@ -27,17 +28,36 @@ const SENSITIVE_PATHS: readonly RegExp[] = [
  * `touchesSensitive` flag always wins; otherwise we scan the file list AND the
  * summary (a mis-labelled change must never slip through).
  */
+/**
+ * Normalize a path for fence matching: unify separators and resolve `.`/`..`
+ * segments, so a path that only *looks* sensitive (or only resolves into the
+ * walled surface after traversal) cannot slip through either way. Without this,
+ * `src/fork/self-upgrade/../dummy.ts` (which resolves OUT of the walled surface)
+ * false-positives as `src/fork/self-upgrade/`, wrongly blocking a safe change.
+ */
+function normalizeForMatch(p: string): string {
+  return path.posix.normalize(p.replace(/\\/g, "/"));
+}
+
+function matchesSensitive(fragment: string): boolean {
+  return SENSITIVE_PATHS.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(fragment);
+  });
+}
+
 export function touchesSensitiveSurface(
   improvement: Pick<Improvement, "touchesSensitive" | "files" | "summary">,
 ): boolean {
   if (improvement.touchesSensitive === true) {
     return true;
   }
-  const haystack = `${improvement.files.join(" ")} ${improvement.summary}`;
-  return SENSITIVE_PATHS.some((pattern) => {
-    pattern.lastIndex = 0;
-    return pattern.test(haystack);
-  });
+  if (improvement.files.map(normalizeForMatch).some(matchesSensitive)) {
+    return true;
+  }
+  // The summary is free text (not a path) — scan it as-is so a mis-labelled
+  // change that merely *mentions* a sensitive area still trips the fence.
+  return matchesSensitive(improvement.summary);
 }
 
 /**
