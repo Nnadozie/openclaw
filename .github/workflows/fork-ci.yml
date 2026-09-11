@@ -53,7 +53,7 @@ jobs:
 
       # Fork-scoped unit tests (no AWS, no provider keys — deterministic).
       - name: Fork unit tests (vitest)
-        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts 'src/fork/**/*.test.ts'
+        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --configLoader runner src/fork
 
       # Build the distribution (verifiable gate the prod host must not run locally).
       # The dist output is NOT deployed here; this only proves the fork builds clean.
