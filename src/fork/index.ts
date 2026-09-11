@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAutonomySeam, type AutonomySeam } from "./autonomy/index.js";
 import type { ForkDiscernmentSeam } from "./ethics/discernment.js";
 import { createEthicsSeam, type EthicsSeam } from "./ethics/index.js";
+import { createHardeningSeam, type HardeningSeam } from "./hardening/index.js";
 import { createNodeModelSeam, type ForkNodeModelService } from "./per-node-model/index.js";
 import { buildNodeModelSelection } from "./per-node-model/selection.js";
 import { createProviderSeam } from "./provider/index.js";
@@ -47,6 +48,11 @@ export interface ForkSeams {
    * Null when the `fork.autoUpgrade` block is absent/disabled (stock install).
    */
   autoUpgrade: AutoUpgradeSeam | null;
+  /**
+   * U4 — hardening defaults (secret-scan · fail-closed allow · NO-DELETE · headers).
+   * Always constructed (the guards are on by default; config can only add allow-list entries).
+   */
+  hardening: HardeningSeam;
 }
 
 /**
@@ -103,6 +109,9 @@ export function createForkSeams(
     // U12 auto-upgrade: opt-in and inert until a caller supplies real validate/
     // apply deps; constructing it here is the production call-site.
     autoUpgrade: createAutoUpgradeSeam(config, autoUpgradeDeps(stateDir)),
+    // U4 hardening: the guards are ON by default (fail-closed); a config block
+    // may only ADD allow-listed actions, never disable a guard.
+    hardening: createHardeningSeam(config),
   };
 }
 
