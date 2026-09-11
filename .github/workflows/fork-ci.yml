@@ -60,7 +60,16 @@ jobs:
       - name: Build distribution
         run: pnpm build
 
-      # Discipline gate: fails if any FEATURE-MATRIX row lacks a proof/test pointer, or any
-      # `@fork-seam` contract is type-only (no concrete impl invoked on a prod path).
+      # Discipline gate: fails if any FEATURE-MATRIX row lacks a proof/test pointer, any
+      # `@fork-seam` contract is type-only (no concrete impl invoked on a prod path), or any
+      # exported seam factory is a dead export (zero prod call-site, no `// @not-wired:`).
       - name: Contract-coverage discipline gate
         run: bash scripts/ci/fork-coverage-guard.sh
+
+      # Meta-gate: prove the coverage guard is NON-VACUOUS — that it FAILS on a deliberately-broken
+      # fixture AND accepts a well-formed GOOD fixture. A guard that cannot fail is not a guard.
+      # (discipline §0.1 / §8). Run even if the coverage gate above is RED, so the meta-gate's
+      # non-vacuity verdict is always reported.
+      - name: Meta-gate — prove coverage guard is non-vacuous
+        if: always()
+        run: bash scripts/ci/fork-coverage-guard.sh . --meta
