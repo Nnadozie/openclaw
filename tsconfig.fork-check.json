@@ -2,7 +2,18 @@
   "extends": "./tsconfig.core.json",
   "compilerOptions": {
     "tsBuildInfoFile": ".artifacts/fork-check.tsbuildinfo",
-    "incremental": false
+    "incremental": false,
+    // `src/fork/**` imports `src/agents/model-selection.ts` (and its transitive
+    // closure), which legitimately references web-standard globals declared in the
+    // DOM lib — `ReadableStreamReadResult`, `BodyInit`, `RequestInfo`, `Request`,
+    // `Response`, and `WebAssembly.Module`. `tsconfig.core.json` narrows `lib` to
+    // `["ES2023"]` (to keep *node-side* src/** pure), which downstream-typed those
+    // symbols away and made `fork-check` fail with TS2304 on PRE-EXISTING upstream
+    // files. Restoring the root `tsconfig.json` lib here is not weakening the check
+    // (scope is still `src/fork/**`, every strict flag intact); it supplies the
+    // standard lib types the reachable code already compiles against in the main
+    // build. Do NOT narrow `lib` below this without also fixing the reachable code.
+    "lib": ["DOM", "DOM.Iterable", "ES2023"]
   },
   "include": ["src/fork/**/*"],
   "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]

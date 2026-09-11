@@ -1,4 +1,4 @@
-// @fork-seam U1,U11 — the fork's production entry point.
+// @fork-seam U1,U5,U6,U11,U12 — the fork's production entry point.
 //
 // One place where the P1 seams are constructed for a running gateway. Stock
 // OpenClaw never imports this module; the fork wires it from the gateway when
@@ -7,12 +7,17 @@
 // It is intentionally dependency-light and side-effect-free: callers construct
 // what they need, lazily.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAutonomySeam, type AutonomySeam } from "./autonomy/index.js";
 import type { ForkDiscernmentSeam } from "./ethics/discernment.js";
 import { createEthicsSeam, type EthicsSeam } from "./ethics/index.js";
+import { createNodeModelSeam, type ForkNodeModelService } from "./per-node-model/index.js";
+import { buildNodeModelSelection } from "./per-node-model/selection.js";
 import { createProviderSeam } from "./provider/index.js";
 import type { ForkProviderSeam } from "./provider/types.js";
 import { createSelfUpgradeSeam, type SelfUpgradeSeam } from "./self-upgrade/index.js";
 import { ImprovementStager } from "./self-upgrade/stage.js";
+import { createAutoUpgradeSeam, type AutoUpgradeSeam } from "./upgrade/index.js";
+import type { CurrencyCandidate, UpgradeValidation } from "./upgrade/types.js";
 
 export interface ForkSeams {
   /** U1 — provider-agnostic LLM seam (BYOK + cost-aware routing). */
@@ -23,6 +28,21 @@ export interface ForkSeams {
   ethics: EthicsSeam | null;
   /** U2 — self-upgrading loop (safe, gated). Null when the config block is off. */
   selfUpgrade: SelfUpgradeSeam | null;
+  /**
+   * U5 — anti-silence autonomy seam (work-queue + watchdog + driver + heartbeat).
+   * Null when the `fork.autonomy` block is absent/disabled (stock install).
+   */
+  autonomy: AutonomySeam | null;
+  /**
+   * U6 — per-node model selection service (default-per-node + launch picker).
+   * Null when the `fork.nodes` block is absent (stock install).
+   */
+  nodeModel: ForkNodeModelService | null;
+  /**
+   * U12 — auto-upgrade / currency seam (always-latest, rollback-safe).
+   * Null when the `fork.autoUpgrade` block is absent/disabled (stock install).
+   */
+  autoUpgrade: AutoUpgradeSeam | null;
 }
 
 /**
@@ -36,14 +56,34 @@ export function createForkSeams(
   opts: { stateDir?: string } = {},
 ): ForkSeams {
   const ethics = createEthicsSeam(config, opts);
+  const stateDir = opts.stateDir;
   return {
-    provider: createProviderSeam(config, { statePath: providerStatePath(opts.stateDir) }),
+    provider: createProviderSeam(config, { statePath: providerStatePath(stateDir) }),
     discernment: ethics?.discernment ?? null,
     ethics,
     // U2 self-upgrade is opt-in and inert until a caller supplies real stage/app
     // deps; constructing the seam here is the production call-site (Tier-2).
-    selfUpgrade: createSelfUpgradeSeam(config, selfUpgradeDeps(opts.stateDir)),
+    selfUpgrade: createSelfUpgradeSeam(config, selfUpgradeDeps(stateDir)),
+    // U5 autonomy: constructed when the `fork.autonomy` block is present; the
+    // queue/driver/watchdog/heartbeat are the live anti-silence surface.
+    autonomy: createAutonomySeam(config, { stateDir }),
+    // U6 per-node model: the stock-derived selection is fed to the seam so a
+    // configured `fork.nodes` block drives the launch picker (same selection the
+    // run already resolves against). Per-run overrides still win (selection.ts).
+    nodeModel: nodeModelSeam(config),
+    // U12 auto-upgrade: opt-in and inert until a caller supplies real validate/
+    // apply deps; constructing it here is the production call-site.
+    autoUpgrade: createAutoUpgradeSeam(config, autoUpgradeDeps(stateDir)),
   };
+}
+
+/** U6 per-node model seam, lazily derived only when `fork.nodes` is present. */
+function nodeModelSeam(config: OpenClawConfig | undefined): ForkNodeModelService | null {
+  const nodes = (config as unknown as { fork?: { nodes?: unknown } } | undefined)?.fork?.nodes;
+  if (!nodes) {
+    return null;
+  }
+  return createNodeModelSeam(config, buildNodeModelSelection({ config }));
 }
 
 /**
@@ -64,6 +104,26 @@ function selfUpgradeDeps(stateDir: string | undefined) {
     validate: async () => ({ ok: false, errors: ["no runtime validator wired"] }),
   });
   return { stager, apply: async () => {} };
+}
+
+/**
+ * U12 auto-upgrade dependencies. Fail-closed defaults so the seam is
+ * constructible from config but inert until the gateway runtime supplies real
+ * validate/canary/apply. The validate default returns a refusal, so nothing
+ * ever promotes on these no-op deps (mirrors U2 self-upgrade). The state
+ * directory is resolved inside `createAutoUpgradeSeam` from the config block,
+ * so it is not threaded here.
+ */
+function autoUpgradeDeps(_stateDir: string | undefined) {
+  return {
+    validate: async (_candidate: CurrencyCandidate): Promise<UpgradeValidation> => ({
+      ok: false,
+      errors: ["no runtime validator wired"],
+    }),
+    apply: async (_candidate: CurrencyCandidate): Promise<void> => {
+      // Fail-closed no-op: promotion is impossible without a real apply dep.
+    },
+  };
 }
 
 function providerStatePath(stateDir: string | undefined): string {

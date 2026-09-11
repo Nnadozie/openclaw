@@ -126,27 +126,102 @@ else
 
   declare -A WIRED_SET=()
 
-  PROD_ENTRY=0
-  if grep -rn --include='*.ts' --include='*.mts' 'applyForkRuntime' "$REPO_ROOT/src" 2>/dev/null \
-     | grep -v '/src/fork/' | grep -v '\.test\.ts' | grep -v '\.test\.mts' | grep -q .; then
-    PROD_ENTRY=1
-  fi
+  # ---- Transitive reachability (fixpoint over fork module imports) ----
+  # Gate 2's documented contract is "reachable from a production path (directly or
+  # transitively through the src/fork bridge modules)". A *literal* name grep in
+  # non-fork files misses indirection like:  model-setup.ts → applyRunNodeModelSelection
+  # → createRunNodeModelSeam → createNodeModelSeam (the real per-node-model run path).
+  # So we compute reachability properly:
+  #   1. Collect the set of fork modules that are (transitively) imported from a
+  #      NON-fork prod file (src/** excluding src/fork/** and tests).
+  #   2. The bridge modules index.ts / runtime.ts are always reachable (the fork's
+  #      own prod entry/binding, wired from server-reload-managed.ts).
+  #   3. A factory is wired if its name is referenced in a reachable module, or
+  #      directly in a non-fork prod file.
 
+  # 1a. non-fork prod files that import from src/fork (by a `fork/` specifier).
+  mapfile -t NONFORK_IMPORTERS < <(
+    grep -rl --include='*.ts' --include='*.mts' --include='*.mjs' \
+      -E "from ['\"][^'\"]*fork/" "$REPO_ROOT/src" 2>/dev/null \
+      | grep -v '/src/fork/' | grep -v '\.test\.' | sort -u
+  )
+
+  # 1b. Build the reachable set with a bash fixpoint over fork-internal imports.
+  declare -A REACHABLE=()
+  REACHABLE["$REPO_ROOT/src/fork/index.ts"]=1
+  REACHABLE["$REPO_ROOT/src/fork/runtime.ts"]=1
+
+  # resolve a relative import specifier to an absolute .ts path under REPO_ROOT.
+  resolve_ts() {
+    local from_dir="$1" spec="$2"
+    local abs
+    abs="$(cd "$from_dir" && realpath -m -- "$spec" 2>/dev/null)" || return 1
+    printf '%s\n' "$abs"
+  }
+
+  # Seed: fork files imported from non-fork prod files.
+  for imp in "${NONFORK_IMPORTERS[@]}"; do
+    [ -z "$imp" ] && continue
+    while IFS= read -r spec; do
+      [ -z "$spec" ] && continue
+      case "$spec" in
+        *'fork/'*) : ;;
+        *) continue ;;
+      esac
+      f="$(resolve_ts "$(dirname "$imp")" "$spec")" || continue
+      f="${f%.js}.ts"
+      case "$f" in
+        "$REPO_ROOT/src/fork/"*) REACHABLE["$f"]=1 ;;
+      esac
+    done < <(grep -hoE "from ['\"][^'\"]+\.[jt]s['\"]" "$imp" 2>/dev/null | sed -E "s/^from ['\"]//;s/['\"]$//")
+  done
+
+  # Fixpoint: follow fork-internal relative imports into .ts files under src/fork.
+  changed=1
+  while [ "$changed" -eq 1 ]; do
+    changed=0
+    for rf in "${!REACHABLE[@]}"; do
+      while IFS= read -r spec; do
+        [ -z "$spec" ] && continue
+        case "$spec" in
+          '.') continue ;;
+        esac
+        f="$(resolve_ts "$(dirname "$rf")" "$spec")" || continue
+        f="${f%.js}.ts"
+        case "$f" in
+          "$REPO_ROOT/src/fork/"*) : ;;
+          *) continue ;;
+        esac
+        if [ -f "$f" ] && [ "${REACHABLE[$f]:-0}" != "1" ]; then
+          REACHABLE["$f"]=1
+          changed=1
+        fi
+      done < <(grep -hoE "from ['\"]\.\.?/[^'\"]+['\"]" "$rf" 2>/dev/null | sed -E "s/^from ['\"]//;s/['\"]$//")
+    done
+  done
+
+  # 1c. A factory is wired if referenced in a non-fork prod file, or in a reachable
+  #     fork module (directly or transitively through the bridge).
   for f in "${ALL_FACTORIES[@]}"; do
     [ -z "$f" ] && continue
     wired=0
-    if [ "$PROD_ENTRY" -eq 1 ]; then
-      if grep -rn --include='*.ts' --include='*.mts' --include='*.mjs' "\b$f\b" "$REPO_ROOT/src" 2>/dev/null \
-         | grep -v '/src/fork/' | grep -v '\.test\.ts' | grep -v '\.test\.mts' | grep -q .; then
-        wired=1
-      fi
-      if [ "$wired" -eq 0 ]; then
-        if grep -rn --include='*.ts' --include='*.mts' "\b$f\b" \
-             "$REPO_ROOT/src/fork/index.ts" "$REPO_ROOT/src/fork/runtime.ts" 2>/dev/null | grep -q .; then
-          wired=1
-        fi
-      fi
+
+    # (a) referenced in a non-fork prod file.
+    if grep -rn --include='*.ts' --include='*.mts' --include='*.mjs' "\b$f\b" "$REPO_ROOT/src" 2>/dev/null \
+       | grep -v '/src/fork/' | grep -v '\.test\.' | grep -q .; then
+      wired=1
     fi
+
+    # (b) referenced in a reachable fork module (transitive through the bridge).
+    if [ "$wired" -eq 0 ]; then
+      for rf in "${!REACHABLE[@]}"; do
+        if grep -q "\b$f\b" "$rf" 2>/dev/null; then
+          wired=1
+          break
+        fi
+      done
+    fi
+
     if [ "$wired" -eq 1 ]; then
       WIRED_SET["$f"]=1
       echo "  ok: $f (wired → reachable from production)"

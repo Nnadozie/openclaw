@@ -6,6 +6,7 @@
 // action. It also asserts stock installs stay inert (opt-in).
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createForkSeams } from "./index.js";
 import {
   applyForkRuntime,
   getForkRuntimeBinding,
@@ -84,5 +85,77 @@ describe("fork runtime — wired on the config-commit path", () => {
     const binding = applyForkRuntime({} as never);
     setForkRuntimeBinding(binding);
     expect(getForkRuntimeBinding()).toBe(binding);
+  });
+});
+
+describe("fork seams — all four live seams constructed on the config-commit path", () => {
+  it("constructs the autonomy seam (U5) when fork.autonomy is enabled", () => {
+    const seams = createForkSeams(
+      {
+        fork: {
+          ethics: { jesuit: { enabled: true } },
+          models: {},
+          autonomy: { enabled: true, queuePath: `${stateDir()}queue.json` },
+        },
+      } as never,
+      { stateDir: stateDir() },
+    );
+    expect(seams.autonomy).not.toBeNull();
+    expect(seams.autonomy!.queue).toBeDefined();
+    expect(seams.autonomy!.driver).toBeDefined();
+    expect(seams.autonomy!.watchdog).toBeDefined();
+    expect(seams.autonomy!.heartbeat).toBeDefined();
+  });
+
+  it("constructs the per-node model seam (U6) when fork.nodes is present", () => {
+    const seams = createForkSeams(
+      {
+        fork: {
+          models: {},
+          nodes: { defaultModel: { agent: "deepseek/deepseek-v4-flash" } },
+        },
+      } as never,
+      { stateDir: stateDir() },
+    );
+    expect(seams.nodeModel).not.toBeNull();
+    expect(seams.nodeModel!.defaultFor("agent")).toBe("deepseek/deepseek-v4-flash");
+  });
+
+  it("does NOT construct the per-node model seam for a stock install", () => {
+    const seams = createForkSeams({} as never, { stateDir: stateDir() });
+    expect(seams.nodeModel).toBeNull();
+  });
+
+  it("constructs the auto-upgrade seam (U12) when fork.autoUpgrade is enabled", () => {
+    const seams = createForkSeams(
+      {
+        fork: {
+          models: {},
+          autoUpgrade: { enabled: true, current: "1.0.0" },
+        },
+      } as never,
+      { stateDir: stateDir() },
+    );
+    expect(seams.autoUpgrade).not.toBeNull();
+    expect(seams.autoUpgrade!.pipeline).toBeDefined();
+  });
+
+  it("auto-upgrade is inert (no promotion) on its fail-closed no-op deps", async () => {
+    const seams = createForkSeams(
+      {
+        fork: {
+          models: {},
+          autoUpgrade: { enabled: true, current: "1.0.0" },
+        },
+      } as never,
+      { stateDir: stateDir() },
+    );
+    const result = await seams.autoUpgrade!.consider({
+      kind: "upstream_release",
+      available: "2.0.0",
+      summary: "a newer upstream release",
+    });
+    // Fail-closed: the no-op validator refuses, so nothing ever promotes.
+    expect(result?.ok ?? true).toBe(false);
   });
 });
