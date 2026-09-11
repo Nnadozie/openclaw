@@ -13,8 +13,14 @@
     // (scope is still `src/fork/**`, every strict flag intact); it supplies the
     // standard lib types the reachable code already compiles against in the main
     // build. Do NOT narrow `lib` below this without also fixing the reachable code.
+    //
+    // The reachable closure also pulls in untyped third-party modules (e.g.
+    // `qrcode`) whose ambient declarations live in `src/types/*.d.ts`. Because
+    // `include` below is scoped to `src/fork/**`, those ambient shims are also
+    // listed in `include` so `fork-check` resolves them exactly as `tsgo:core`
+    // does (they are global ambient declarations, not "real code").
     "lib": ["DOM", "DOM.Iterable", "ES2023"]
   },
-  "include": ["src/fork/**/*"],
+  "include": ["src/fork/**/*", "src/types/**/*.d.ts"],
   "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
 }
