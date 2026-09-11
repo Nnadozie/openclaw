@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ForkDriver } from "./driver.js";
 import { ForkHeartbeatInitiative } from "./heartbeat.js";
 import { ForkWorkQueue } from "./queue.js";
+import { createAutonomyTicker, type AutonomyTicker } from "./ticker.js";
 import type { AutonomyConfig } from "./types.js";
 import { ForkWatchdog } from "./watchdog.js";
 
@@ -26,6 +27,8 @@ export interface AutonomySeam {
   driver: ForkDriver;
   watchdog: ForkWatchdog;
   heartbeat: ForkHeartbeatInitiative;
+  /** The scheduled driver: run watchdog.check() + heartbeat.tick() on a cadence. */
+  ticker: AutonomyTicker;
 }
 
 export interface AutonomySeamOptions {
@@ -75,7 +78,11 @@ export function createAutonomySeam(
 
   const heartbeat = new ForkHeartbeatInitiative(queue, driver, { refillAction });
 
-  return { queue, driver, watchdog, heartbeat };
+  const ticker = createAutonomyTicker({ queue, driver, watchdog, heartbeat }, {
+    intervalMs: autonomy.tickIntervalMs,
+  });
+
+  return { queue, driver, watchdog, heartbeat, ticker };
 }
 
 /** Process-wide singleton (lazy). */
@@ -96,6 +103,8 @@ export function resetAutonomySeamForTest(): void {
 export { ForkDriver } from "./driver.js";
 export { ForkHeartbeatInitiative } from "./heartbeat.js";
 export { EmptyQueueError, ForkWorkQueue } from "./queue.js";
+export { ForkAutonomyTicker, createAutonomyTicker } from "./ticker.js";
+export type { AutonomyTicker, AutonomyTickerOptions, AutonomyTickResult, AutonomyTickSurface } from "./ticker.js";
 export { ForkWatchdog } from "./watchdog.js";
 export type { ForkWorkQueueSeam } from "./types.js";
 export * from "./types.js";

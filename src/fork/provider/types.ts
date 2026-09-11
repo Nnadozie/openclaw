@@ -118,6 +118,44 @@ export interface AdapterResponse {
   streaming: boolean;
 }
 
+/**
+ * The transport that actually delivers a turn to the selected provider and
+ * returns the raw provider response. In production this is the real HTTP/SDK
+ * client for the provider; in the runtime gate it is an in-process mock that
+ * returns a provider-shaped fixture. It is the single I/O boundary of the seam —
+ * everything else (route → adapter → buildRequest → parseResponse) is pure.
+ *
+ * A transport MUST be given a key transiently (never stored) and MUST NOT leak
+ * it: the seam redacts every surface it controls, and the transport is the one
+ * place a raw key may legitimately touch the wire.
+ */
+export interface ForkTurnTransport {
+  /**
+   * Deliver a wire request and return the raw provider response. `key` is the
+   * transient BYOK key for the provider (or undefined for `authKind: "none"`).
+   * The adapter id and config are supplied so a transport can select the right
+   * wire dialect; the response is parsed by the adapter afterwards.
+   */
+  send(request: AdapterWireRequest, requestMeta: ForkTurnRequestMeta): Promise<unknown>;
+}
+
+/** Provider-side metadata for a single served turn (never carries a key). */
+export interface ForkTurnRequestMeta {
+  adapterId: string;
+  provider: string;
+  model: string;
+}
+
+/** The normalized result of one served turn (the 1:1 shared shape). */
+export interface ServeResult {
+  /** AdapterResponse normalized from the provider's raw response. */
+  response: AdapterResponse;
+  /** The adapter id that actually served the turn (e.g. "native-anthropic"). */
+  adapterId: string;
+  /** The provider/model that served the turn (`provider/model`). */
+  servedBy: string;
+}
+
 /** The U1 seam surface. */
 export interface ForkProviderSeam {
   register(cfg: ForkModelConfig): void;
@@ -127,6 +165,13 @@ export interface ForkProviderSeam {
   swap(next: ForkModelConfig, opts: { atomic: true }): Promise<SwapResult>;
   rollback(): Promise<RollbackResult>;
   route(work: RouteWork): ForkModelConfig;
+  /**
+   * Serve one complete turn through the adapter selected for the routed model.
+   * This is the real runtime path: route → selectAdapter → buildRequest →
+   * transport.send → parseResponse. A turn is NEVER served by a provider whose
+   * config failed validation; a transport that throws surfaces a redacted error.
+   */
+  serve(request: AdapterRequest, work?: RouteWork): Promise<ServeResult>;
 }
 
 // ---- Zod schemas (additive config surface: fork.models[], fork.router{}) ----

@@ -130,5 +130,7 @@ export interface AutonomyConfig {
   driverStatePath?: string;
   /** Action text for the synthesised successor (never-empty invariant). */
   refillAction?: string;
+  /** Scheduled tick cadence (ms). Defaults to 5 minutes. */
+  tickIntervalMs?: number;
   watchdog?: { enabled?: boolean; stallMs?: number };
 }

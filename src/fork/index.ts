@@ -16,6 +16,10 @@ import { createProviderSeam } from "./provider/index.js";
 import type { ForkProviderSeam } from "./provider/types.js";
 import { createSelfUpgradeSeam, type SelfUpgradeSeam } from "./self-upgrade/index.js";
 import { ImprovementStager } from "./self-upgrade/stage.js";
+import {
+  createSelfUpgradeRuntimeDeps,
+  type SelfUpgradeRuntimeOptions,
+} from "./self-upgrade/runtime.js";
 import { createAutoUpgradeSeam, type AutoUpgradeSeam } from "./upgrade/index.js";
 import type { CurrencyCandidate, UpgradeValidation } from "./upgrade/types.js";
 
@@ -51,19 +55,44 @@ export interface ForkSeams {
  * null unless the ethics/devotions block is enabled. A present-but-disabled
  * ethics policy throws (fail-closed, never a silent no-op).
  */
+export interface ForkSeamOptions {
+  stateDir?: string;
+  /**
+   * U1 turn transport (real provider client in production; in-process mock in
+   * the runtime gate). Forwarded to the provider seam's `transport` option.
+   */
+  providerTransport?: import("./provider/types.js").ForkTurnTransport;
+  /**
+   * U1 adapter registry override (e.g. a runtime gate registering a mock/ad-hoc
+   * adapter). Forwarded to the provider seam's `adapters` option.
+   */
+  providerAdapters?: readonly import("./provider/types.js").ForkModelAdapter[];
+  /**
+   * U2 self-upgrade RUNTIME stage/apply deps. When provided, the self-upgrade
+   * seam is constructed with real stage/apply/restore deps (gated, sandboxed,
+   * rollback-capable) instead of the fail-closed no-op deps. This is what turns
+   * U2 from inert to runtime-proven. Stock installs omit it (inert).
+   */
+  selfUpgradeRuntime?: SelfUpgradeRuntimeOptions;
+}
+
 export function createForkSeams(
   config: OpenClawConfig | undefined,
-  opts: { stateDir?: string } = {},
+  opts: ForkSeamOptions = {},
 ): ForkSeams {
   const ethics = createEthicsSeam(config, opts);
   const stateDir = opts.stateDir;
   return {
-    provider: createProviderSeam(config, { statePath: providerStatePath(stateDir) }),
+    provider: createProviderSeam(config, {
+      statePath: providerStatePath(stateDir),
+      transport: opts.providerTransport,
+      adapters: opts.providerAdapters,
+    }),
     discernment: ethics?.discernment ?? null,
     ethics,
     // U2 self-upgrade is opt-in and inert until a caller supplies real stage/app
     // deps; constructing the seam here is the production call-site (Tier-2).
-    selfUpgrade: createSelfUpgradeSeam(config, selfUpgradeDeps(stateDir)),
+    selfUpgrade: createSelfUpgradeSeam(config, selfUpgradeDeps(stateDir, opts.selfUpgradeRuntime)),
     // U5 autonomy: constructed when the `fork.autonomy` block is present; the
     // queue/driver/watchdog/heartbeat are the live anti-silence surface.
     autonomy: createAutonomySeam(config, { stateDir }),
@@ -89,11 +118,22 @@ function nodeModelSeam(config: OpenClawConfig | undefined): ForkNodeModelService
 /**
  * U2 self-upgrade dependencies. The stage/apply behaviour is injected by the
  * gateway's runtime wiring; here we provide fail-closed no-op deps so the seam
- * is constructible (and inert) without a runtime backer. A real deployment
- * supplies materialize/validate/apply that operate on the fork tree.
+ * is constructible (and inert) without a runtime backer. When the caller
+ * supplies `selfUpgradeRuntime` (the runtime gate / a real deployment), we
+ * build the real stage/apply/restore deps so the seam can actually act.
  */
-function selfUpgradeDeps(stateDir: string | undefined) {
+function selfUpgradeDeps(
+  stateDir: string | undefined,
+  runtime: SelfUpgradeRuntimeOptions | undefined,
+) {
   const base = stateDir ?? process.env.OPENCLAW_STATE_DIR ?? ".";
+  if (runtime) {
+    // Real deps: the loop stages, validates, applies and rolls back for real.
+    return createSelfUpgradeRuntimeDeps({
+      ...runtime,
+      appliedRoot: runtime.appliedRoot ?? `${base}/fork/self-upgrade-applied`,
+    });
+  }
   // Fail-closed defaults: the seam is constructible from config but inert until
   // the gateway runtime supplies real materialize/validate/apply. The validate
   // default returns a refusal so nothing ever promotes on these no-op deps.
