@@ -70,8 +70,7 @@ describe("U1 Tier-3 proof — full lifecycle on a mock adapter (no real key)", (
       models: [MOCK_MODEL],
       env: { MOCK_API_KEY: FAKE_KEY },
       adapters: [mockAdapter],
-      env2: undefined,
-    } as never); // options are constructed via a narrow cast for test injection
+    });
 
     // 1. validate the fixture target
     const validation = await seam.validate(MOCK_MODEL_B);

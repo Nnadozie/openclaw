@@ -12,16 +12,20 @@
 // every error path via `safeError`.
 import fs from "node:fs";
 import path from "node:path";
-import { selectAdapter } from "./adapters.js";
+import { DEFAULT_ADAPTERS, selectAdapter } from "./adapters.js";
 import { requiresUserKey, resolveByok, safeError } from "./byok.js";
 import { redactSecrets } from "./redact.js";
 import {
   ForkModelConfigSchema,
+  type AdapterRequest,
+  type ForkModelAdapter,
   type ForkModelConfig,
   type ForkProviderSeam,
+  type ForkTurnTransport,
   type ProbeResult,
   type RollbackResult,
   type RouteWork,
+  type ServeResult,
   type SwapResult,
   type ValidationResult,
 } from "./types.js";
@@ -53,6 +57,18 @@ export interface ProviderSeamOptions {
   probeImpl?: (cfg: ForkModelConfig) => Promise<ProbeResult>;
   /** Optional hook fired after state is written (e.g. a real restart). */
   onRestart?: (cfg: ForkModelConfig) => Promise<void>;
+  /**
+   * Adapter registry (defaults to the native + generic OpenAI-compatible set).
+   * Injectable so a provider (or the runtime gate) can register a custom adapter;
+   * also lets the gate assert which adapter served a turn.
+   */
+  adapters?: readonly ForkModelAdapter[];
+  /**
+   * The turn transport (real HTTP/SDK client in production; in-process mock in
+   * the runtime gate). Required only to `serve()` a turn; validate/probe/swap/
+   * rollback/route work transport-free (dry-run).
+   */
+  transport?: ForkTurnTransport;
 }
 
 export class ForkProviderService implements ForkProviderSeam {
@@ -75,6 +91,16 @@ export class ForkProviderService implements ForkProviderSeam {
   /** Registry key: canonical provider/model ref. */
   private key(cfg: Pick<ForkModelConfig, "provider" | "model">): string {
     return `${cfg.provider}/${cfg.model}`;
+  }
+
+  /** The adapter registry in force (injected or the shared default). */
+  private adapters(): readonly ForkModelAdapter[] {
+    return this.opts.adapters ?? DEFAULT_ADAPTERS;
+  }
+
+  /** Select the adapter that can serve a config (injected registry-aware). */
+  private select(cfg: ForkModelConfig): ForkModelAdapter | undefined {
+    return selectAdapter(cfg, this.adapters());
   }
 
   register(cfg: ForkModelConfig): void {
@@ -101,7 +127,7 @@ export class ForkProviderService implements ForkProviderSeam {
       return { ok: false, errors };
     }
     const value = parsed.data;
-    if (!selectAdapter(value, undefined)) {
+    if (!this.select(value)) {
       errors.push(`no adapter supports provider "${value.provider}"`);
     }
     if (value.authKind === "none" && !value.baseURL) {
@@ -124,7 +150,7 @@ export class ForkProviderService implements ForkProviderSeam {
       const result = await this.opts.probeImpl(cfg);
       return { ok: result.ok, detail: redactSecrets(result.detail) };
     }
-    const adapter = selectAdapter(cfg);
+    const adapter = this.select(cfg);
     if (!adapter) {
       return { ok: false, detail: `no adapter for provider "${cfg.provider}"` };
     }
@@ -228,6 +254,51 @@ export class ForkProviderService implements ForkProviderSeam {
       return current;
     }
     return this.isPeak(current, work.nowUtc) ? utility : current;
+  }
+
+  /**
+   * Serve one complete turn through the adapter selected for the routed model.
+   * This is the REAL runtime path the gate asserts: route → selectAdapter →
+   * buildRequest → transport.send → parseResponse. Validation is NOT re-run here
+   * (the active model was validated at swap time); we DO fail closed with a
+   * redacted error when no adapter or transport is wired, so a stock install can
+   * never serve a turn through an unconfigured provider.
+   */
+  async serve(request: AdapterRequest, work?: RouteWork): Promise<ServeResult> {
+    const cfg = this.route(work ?? { essential: true, nowUtc: Date.now() });
+    const adapter = this.select(cfg);
+    if (!adapter) {
+      throw new Error(
+        redactSecrets(`no adapter for provider "${cfg.provider}" (model "${cfg.model}")`),
+      );
+    }
+    if (!this.opts.transport) {
+      throw new Error(
+        redactSecrets(`no turn transport wired for provider "${cfg.provider}" (fail-closed)`),
+      );
+    }
+
+    // Resolve the transient BYOK key (never stored; redacted on any error path).
+    let key: string | undefined;
+    if (requiresUserKey(cfg.authKind)) {
+      key = resolveByok(cfg, this.opts.env).key;
+    }
+
+    const wire = adapter.buildRequest(cfg, request, key);
+    let raw: unknown;
+    try {
+      raw = await this.opts.transport.send(wire, {
+        adapterId: adapter.id,
+        provider: cfg.provider,
+        model: cfg.model,
+      });
+    } catch (error) {
+      // Redact any key that a misbehaving transport echoed into the error, so a
+      // raw BYOK key can never cross the serve() boundary into logs/tests.
+      throw new Error(safeError(`transport failed: ${String(error)}`, key));
+    }
+    const response = adapter.parseResponse(raw);
+    return { response, adapterId: adapter.id, servedBy: this.key(cfg) };
   }
 
   private isPeak(cfg: ForkModelConfig, nowUtc: number): boolean {

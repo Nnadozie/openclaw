@@ -51,14 +51,32 @@ export interface ForkSeams {
  * null unless the ethics/devotions block is enabled. A present-but-disabled
  * ethics policy throws (fail-closed, never a silent no-op).
  */
+export interface ForkSeamOptions {
+  stateDir?: string;
+  /**
+   * U1 turn transport (real provider client in production; in-process mock in
+   * the runtime gate). Forwarded to the provider seam's `transport` option.
+   */
+  providerTransport?: import("./provider/types.js").ForkTurnTransport;
+  /**
+   * U1 adapter registry override (e.g. a runtime gate registering a mock/ad-hoc
+   * adapter). Forwarded to the provider seam's `adapters` option.
+   */
+  providerAdapters?: readonly import("./provider/types.js").ForkModelAdapter[];
+}
+
 export function createForkSeams(
   config: OpenClawConfig | undefined,
-  opts: { stateDir?: string } = {},
+  opts: ForkSeamOptions = {},
 ): ForkSeams {
   const ethics = createEthicsSeam(config, opts);
   const stateDir = opts.stateDir;
   return {
-    provider: createProviderSeam(config, { statePath: providerStatePath(stateDir) }),
+    provider: createProviderSeam(config, {
+      statePath: providerStatePath(stateDir),
+      transport: opts.providerTransport,
+      adapters: opts.providerAdapters,
+    }),
     discernment: ethics?.discernment ?? null,
     ethics,
     // U2 self-upgrade is opt-in and inert until a caller supplies real stage/app
