@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fork-coverage-guard.sh — OpenClaw+ discipline gate (read-only).
 #
-# Three gates; any FAIL exits non-zero.
+# Four gates; any FAIL exits non-zero.
 #   Gate 1 — FEATURE-MATRIX proof/test pointer: a row marked ✅/🟡 must carry a
 #            test pointer (a `.test.ts` path / `(N)` count) AND a proof pointer.
 #   Gate 2 — @fork-seam factory reachability: a seam factory must be reachable
@@ -11,6 +11,14 @@
 #   Gate 3 — dead-export: an exported `create*Seam` factory under src/fork/** with
 #            ZERO production call-sites and no `// @not-wired:` annotation FAILS.
 #            (Paid for: `bumpEntitlementForAddon` existed, typechecked, did nothing.)
+#   Gate 4 — ledger-mirror integrity (STRICT local mode only): when a projects/ doc
+#            copy of a ledger is present AND belongs to the SAME checkout of this repo
+#            (byte-identical HEAD commit), it MUST be byte-identical to the repo
+#            canonical. A STALE mirror silently lies and can mask the truthful ledger.
+#            In CI (doc tree absent) the gate SKIPS; on a host with MULTIPLE divergent
+#            checkouts of this repo the mirror may legitimately be a different
+#            generation — so there Gate 4 WARNS (non-blocking) unless
+#            FORK_GUARD_STRICT_MIRROR=1. Never a false CI failure.
 #
 # META-GATE (--meta): prove this guard is NON-VACUOUS. It MUST (a) PASS on the real
 # ledgers + real source, and (b) FAIL on a deliberately-broken fixture (a temp
@@ -34,16 +42,18 @@ case "${2:-}" in
   --meta) META=1 ;;
 esac
 
-# The ledgers. FEATURE-MATRIX lives in the projects/docs tree (not the repo); fall back to
-# the repo if the doc isn't checked out here. Because the CI runner only has the repo, the
-# matrix is looked up relative to the repo root's known docs path only when present.
+# The ledgers are CANONICAL in the repo ($REPO_ROOT/product/*.md) — that is what CI verifies,
+# because the CI runner only checks out the repo. The projects/ design tree keeps a mirror copy,
+# read here only as a fallback when the repo ledger is absent (e.g. a docs-only checkout).
+# Order: canonical first. Gate 4 enforces that a present mirror is byte-identical, so this lookup
+# order can never mask a real divergence.
 MATRIX_PATHS=(
-  "/data/.openclaw/workspace/projects/openclaw-fork/product/FEATURE-MATRIX.md"
   "$REPO_ROOT/product/FEATURE-MATRIX.md"
+  "/data/.openclaw/workspace/projects/openclaw-fork/product/FEATURE-MATRIX.md"
 )
 CONTRACT_PATHS=(
-  "/data/.openclaw/workspace/projects/openclaw-fork/product/CONTRACT-COVERAGE.md"
   "$REPO_ROOT/product/CONTRACT-COVERAGE.md"
+  "/data/.openclaw/workspace/projects/openclaw-fork/product/CONTRACT-COVERAGE.md"
 )
 
 # The dead-export hand-list is now DERIVED (Gate 3 greps src/fork for factories), not hand-typed.
@@ -274,6 +284,55 @@ else
   done
 fi
 
+# ---- Gate 4: doc-copy ledger integrity (the doc is a MIRROR, not a fork) ----
+# The ledgers are canonical in the REPO ($REPO_ROOT/product/*.md) — that is what CI verifies
+# (the CI runner has only the repo). A doc copy also lives in the projects/ design tree. When
+# BOTH are present on this host they MUST be byte-identical: a stale/divergent copy silently LIES.
+# (MATRIX_PATHS now lists the repo canonical FIRST, so a stale mirror can no longer mask it — the
+# old masking bug that motivated this gate is closed.) Paid for 2026-09-11: the doc copy was ~6h
+# stale, silently downgrading U1/U4/U6/U11/U12 from ✅ to 🟡/❌ in the guard's Gate 1 view.
+#
+# SCOPE (2026-09-12 fix): the literal doc path is a SPECIFIC checkout
+# (`projects/openclaw-fork`). This host carries SEVERAL independent generations of the fork repo
+# (dev / tunde / xavier / duo / sister boxes), so that literal copy can belong to a DIFFERENT
+# generation than the checkout running this guard — a legitimate divergence, not a lying mirror.
+# So "byte-divergent" alone is NOT proof of a lying mirror. We therefore enforce only when the doc
+# checkout is provably the SAME repo history as this one (its HEAD sha == ours). Otherwise: WARN
+# (non-blocking) so drifts are visible; `FORK_GUARD_STRICT_MIRROR=1` forces blocking everywhere.
+# The gate SKIPS cleanly when the doc tree or a file is absent (the CI runner case).
+DOC_PRODUCT_DIR="${FORK_GUARD_DOC_DIR:-/data/.openclaw/workspace/projects/openclaw-fork/product}"
+if [ -f "$DOC_PRODUCT_DIR/FEATURE-MATRIX.md" ] || [ -f "$DOC_PRODUCT_DIR/CONTRACT-COVERAGE.md" ]; then
+  echo "== Gate 4: doc-copy ledger integrity (doc copy MUST mirror the repo canonical) =="
+  _head_sha="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo)"
+  _doc_sha="$(git -C "$DOC_PRODUCT_DIR" rev-parse HEAD 2>/dev/null || echo)"
+  _strict="${FORK_GUARD_STRICT_MIRROR:-0}"
+  _same_checkout=0
+  [ -n "$_head_sha" ] && [ "$_head_sha" = "$_doc_sha" ] && _same_checkout=1
+  _blocking=0
+  if [ "$_same_checkout" -eq 1 ] || [ "$_strict" = "1" ]; then _blocking=1; fi
+  for _name in FEATURE-MATRIX.md CONTRACT-COVERAGE.md; do
+    _repo_f="$REPO_ROOT/product/$_name"
+    _doc_f="$DOC_PRODUCT_DIR/$_name"
+    if [ -f "$_repo_f" ] && [ -f "$_doc_f" ]; then
+      if cmp -s "$_repo_f" "$_doc_f"; then
+        echo "  ok: $_name (doc copy == repo canonical)"
+      else
+        echo "  divergence: $_name doc copy != repo canonical ($_doc_f)"
+        if [ "$_blocking" -eq 1 ]; then
+          echo "::error:: Gate 4: $_name doc copy DIVERGES from the repo canonical (same checkout / strict)."
+          echo "         A stale ledger copy silently lies about a runtime-proven claim."
+          echo "         Fix: cp '$_repo_f' '$_doc_f'  (then commit BOTH trees)."
+          fail=1
+        else
+          echo "::warning:: Gate 4 (advisory): doc copy belongs to a DIFFERENT repo generation"
+          echo "         (HEAD ${_head_sha:-none} != ${_doc_sha:-none}) — not a lying mirror, but the copy is behind."
+          echo "         Refresh when the canonical generation settles, or set FORK_GUARD_STRICT_MIRROR=1."
+        fi
+      fi
+    fi
+  done
+fi
+
 # ---- META-GATE: prove non-vacuity ----
 if [ "$META" -eq 1 ]; then
   echo "== META-GATE: prove this guard is non-vacuous =="
@@ -348,6 +407,21 @@ if [ "$META" -eq 1 ]; then
     exit 1
   fi
   echo "  meta-B PASS: guard accepts a well-formed GOOD fixture."
+
+  # --- meta-C: Gate 4 must go RED on a deliberately-divergent same-checkout mirror ---
+  # Point the guard at a temp "doc" dir holding a MODIFIED ledger copy, force strict mode,
+  # and require a non-zero exit. (Re-invokes this script WITHOUT --meta; output discarded.)
+  META_DOC="$META_DIR/docprod"
+  mkdir -p "$META_DOC"
+  cp "$REPO_ROOT/product/FEATURE-MATRIX.md" "$META_DOC/FEATURE-MATRIX.md"
+  printf '\n<!-- meta-C deliberate divergence -->\n' >> "$META_DOC/FEATURE-MATRIX.md"
+  cp "$REPO_ROOT/product/CONTRACT-COVERAGE.md" "$META_DOC/CONTRACT-COVERAGE.md"
+  if FORK_GUARD_DOC_DIR="$META_DOC" FORK_GUARD_STRICT_MIRROR=1 bash "${BASH_SOURCE[0]}" "$ROOT" >/dev/null 2>&1; then
+    echo "::error:: META-GATE meta-C FAILED: Gate 4 did not flag a deliberately-divergent mirror (vacuous)."
+    exit 1
+  fi
+  echo "  meta-C PASS: Gate 4 goes RED on a divergent mirror."
+
   echo "META-GATE: PASS (guard is non-vacuous: red on broken, green on good)."
 fi
 
